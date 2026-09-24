@@ -1,4 +1,5 @@
 local M = {}
+local table_pages = require("better_sql.table_pages")
 
 local PAGE_SIZE = 100
 local CELL_WIDTH = 24
@@ -295,10 +296,13 @@ local function request_page(state, offset)
   local client = state.client
   local generation = state.generation
   local function fetch(next_offset)
-    client:request("table.page", {
-      schema = state.relation.schema, table = state.relation.name,
-      offset = next_offset, retain_handles = retained_handles(state),
-    }, function(err, page)
+    table_pages.request(client, function()
+      if views[state.buf] ~= state or state.client ~= client or state.generation ~= generation then return nil end
+      return {
+        schema = state.relation.schema, table = state.relation.name,
+        offset = next_offset, retain_handles = retained_handles(state),
+      }
+    end, function(err, page)
       if views[state.buf] ~= state or state.client ~= client or state.generation ~= generation then return end
       if err then
         state.error = err.message or err.code or "Page request failed"
@@ -310,12 +314,12 @@ local function request_page(state, offset)
           return
         end
         state.error = nil
-        if state.recovering and next(state.stale) then
+        if next(state.stale) then
           state.error = "Unmatched rows after reload; review and discard their pending cells with u"
           show_unmatched_rows(state)
         end
       end
-      if state.recovering and err then show_unmatched_rows(state) end
+      if err then show_unmatched_rows(state) end
       state.loading, state.recovering = false, false
       local visible = {}
       for _, row in ipairs(state.page.rows) do
@@ -583,6 +587,7 @@ function M.disconnect(client)
   for _, state in pairs(views) do
     if state.client == client then state.client = nil; invalidate(state) end
   end
+  table_pages.disconnect(client)
 end
 
 function M.set_connection(client, profile)

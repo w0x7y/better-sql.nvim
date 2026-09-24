@@ -117,6 +117,26 @@ key("r")
 requests[#requests].callback({ code = "database_error", message = "reload failed" })
 assert(content(buf):find("first recovered", 1, true) and content(buf):find("last recovered", 1, true),
   "failed reload hid the retained staged text")
+-- A completed reload cannot find either original key because both rows were deleted.
+key("r")
+requests[#requests].callback(nil, page({ row("reload1", "50", "other first") }, 0, true))
+requests[#requests].callback(nil, page({ row("reload101", "150", "other row") }, 100))
+assert(content(buf):find("Unmatched rows", 1, true))
+-- Unmatched pending cells remain visible and selectable on every page.
+key("]p")
+requests[#requests].callback(nil, page({ row("page101", "150", "other row") }, 100))
+assert(content(buf):find("first recovered", 1, true) and content(buf):find("last recovered", 1, true),
+  "next page hid unmatched edits")
+key("[p")
+requests[#requests].callback(nil, page({ row("page1", "50", "other first") }, 0, true))
+assert(content(buf):find("first recovered", 1, true) and content(buf):find("last recovered", 1, true),
+  "previous page hid unmatched edits")
+local unmatched_save_count = #requests
+grid.save()
+assert(#requests == unmatched_save_count, "paging allowed a save with unmatched handles")
+vim.api.nvim_win_set_cursor(0, { 7, 0 }); key("lu")
+assert(grid.pending_count() == 1, "unmatched edit was not selectable after paging")
+assert(content(buf):find("last recovered", 1, true))
 vim.api.nvim_buf_delete(buf, { force = true })
 
 -- A profile switch cannot abandon edits entered after its save started.
@@ -140,6 +160,41 @@ grid.before_switch(function(err) busy_error = err end)
 assert(busy_error and grid.pending_count() == 1, "switch discarded an in-flight save")
 current_save.callback(nil, { rows = { row("race1", "1", "new pending") } })
 vim.api.nvim_buf_delete(buf, { force = true })
+
+-- Each queued page computes retained handles only after the preceding grid loads.
+local queued_relation = { schema = "public", name = "users", columns = columns, primary_key = { "id" } }
+local request_start = #requests
+local queued_left = grid.open(client, queued_relation, "test")
+local queued_right = grid.open(client, queued_relation, "test")
+assert(#requests == request_start + 1, "two page requests were sent concurrently")
+requests[#requests].callback(nil, page({ row("queued_left", "1", "left") }))
+assert(#requests == request_start + 2)
+assert(vim.deep_equal(requests[#requests].params.retain_handles, { "queued_left" }),
+  "queued page did not retain the newly loaded grid")
+requests[#requests].callback(nil, page({ row("queued_right", "2", "right") }))
+vim.api.nvim_buf_delete(queued_left, { force = true })
+vim.api.nvim_buf_delete(queued_right, { force = true })
+-- Wiping a queued grid skips its request without blocking the next live grid.
+request_start = #requests
+queued_left = grid.open(client, queued_relation, "test")
+local wiped = grid.open(client, queued_relation, "test")
+queued_right = grid.open(client, queued_relation, "test")
+vim.api.nvim_buf_delete(wiped, { force = true })
+requests[#requests].callback(nil, page({ row("surviving_left", "1", "left") }))
+assert(#requests == request_start + 2, "wiped grid was requested or live grid stalled")
+requests[#requests].callback(nil, page({ row("surviving_right", "2", "right") }))
+assert(content(queued_right):find("Rows ", 1, true))
+vim.api.nvim_buf_delete(queued_left, { force = true })
+vim.api.nvim_buf_delete(queued_right, { force = true })
+-- Helper exit drains queued requests without attempting another write to it.
+request_start = #requests
+queued_left = grid.open(client, queued_relation, "test")
+queued_right = grid.open(client, queued_relation, "test")
+requests[#requests].callback({ code = "helper_exited", message = "helper process exited" })
+assert(#requests == request_start + 1, "queued page was sent to an exited helper")
+assert(content(queued_right):find("helper process exited", 1, true), "queued view remained loading after exit")
+vim.api.nvim_buf_delete(queued_left, { force = true })
+vim.api.nvim_buf_delete(queued_right, { force = true })
 
 -- Real milestone flow validates the Lua/helper/database boundary, transaction rollback,
 -- replacement versions, reconnect recovery and profile resolution.
@@ -276,6 +331,23 @@ connect("other_db")
 assert(grid.pending_count() == 0)
 actual = sql("SELECT username FROM " .. schema_name .. ".users").sets[1].rows
 assert(actual[1][1].text == "switch save")
+-- Two grids opened before either page returns must both keep usable originals.
+sql("INSERT INTO " .. schema_name .. ".users VALUES ('b',1,'second grid','mail')")
+local relation = { schema = schema_name, name = "users", columns = {}, primary_key = { "tenant", "id" } }
+local left = grid.open(better_sql.client, relation, "other_db")
+local right = grid.open(better_sql.client, relation, "other_db")
+assert(vim.wait(3000, function()
+  return content(left):find("Rows ", 1, true) and content(right):find("Rows ", 1, true)
+end), "overlapping grids did not load")
+vim.api.nvim_set_current_win(vim.fn.bufwinid(left)); key("ll")
+grid.stage(grid.current_cell().row_handle, "username", "left grid saved", false)
+local left_error = save_grid()
+assert(not left_error, "overlapping grid lost its handle: " .. vim.inspect(left_error))
+vim.api.nvim_set_current_win(vim.fn.bufwinid(right)); key("jll")
+grid.stage(grid.current_cell().row_handle, "username", "right grid saved", false)
+assert(not save_grid(), "second grid lost its handle")
+actual = sql("SELECT username FROM " .. schema_name .. ".users ORDER BY tenant").sets[1].rows
+assert(actual[1][1].text == "left grid saved" and actual[2][1].text == "right grid saved")
 sql("DROP SCHEMA " .. schema_name .. " CASCADE")
 better_sql.client:stop()
 print("table edit tests passed")
