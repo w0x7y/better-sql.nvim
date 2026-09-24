@@ -3,6 +3,7 @@
 import psycopg
 
 from better_sql.catalog import load_catalog
+from better_sql.edits import save_edits
 from better_sql.protocol import ProtocolError
 from better_sql.query import run_query
 from better_sql.tables import TableStore
@@ -67,6 +68,14 @@ class Session:
                     sqlstate=exc.sqlstate,
                     position=int(position) if position else None,
                 ) from None
+        if method == "table.save":
+            if self.conn is None:
+                raise ProtocolError("not_connected", "connect to a database first")
+            schema = params.get("schema")
+            table = params.get("table")
+            if not isinstance(schema, str) or not schema or not isinstance(table, str) or not table:
+                raise ProtocolError("invalid_request", "schema and table must be nonempty strings")
+            return save_edits(self.conn, self.tables, {"schema": schema, "name": table}, params.get("edits"))
         if method == "table.page":
             if self.conn is None:
                 raise ProtocolError("not_connected", "connect to a database first")

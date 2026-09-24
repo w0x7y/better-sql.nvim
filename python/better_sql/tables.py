@@ -1,6 +1,7 @@
 """Read table pages and retain originals for later row edits."""
 
 import secrets
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,6 +22,7 @@ class RowOriginal:
 class TableStore:
     def __init__(self):
         self.handles: dict[str, RowOriginal] = {}
+        self.relations: dict[tuple[str, str], dict] = {}
 
     def page(self, conn, relation, offset: int, limit: int = 100,
              retain_handles: list[str] | None = None) -> dict:
@@ -72,6 +74,7 @@ class TableStore:
                 "cells": [cell(value) for value in raw_row[:len(column_names)]],
             })
         self.handles = kept
+        self.relations[(relation["schema"], relation["name"])] = deepcopy(relation)
         return {
             "columns": columns, "rows": rows, "offset": offset,
             "has_more": len(fetched) > limit, "editable": editable,
