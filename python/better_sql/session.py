@@ -1,5 +1,8 @@
 """Own the active PostgreSQL connection and dispatch helper requests."""
 
+import re
+import threading
+
 import psycopg
 
 from better_sql.catalog import load_catalog
@@ -13,6 +16,11 @@ class Session:
     def __init__(self):
         self.conn = None
         self.tables = TableStore()
+        self.active_request_id = None
+        self.request_lock = threading.RLock()
+        self._conninfo = None
+        self._secrets = set()
+        self._reconnect_required = False
 
     def close(self):
         if self.conn is not None:
@@ -20,7 +28,55 @@ class Session:
             self.conn = None
         self.tables = TableStore()
 
+    def redact(self, message):
+        for secret in sorted(self._secrets, key=len, reverse=True):
+            message = message.replace(secret, "[redacted]")
+        message = re.sub(r"postgres(?:ql)?://[^\s]+", "[redacted connection]", message)
+        return re.sub(r"(?i)password\s*=\s*(?:'(?:[^'\\]|\\.)*'|[^\s]+)",
+                      "password=[redacted]", message)
+
+    def cancel(self, target_id: int) -> dict:
+        with self.request_lock:
+            if target_id != self.active_request_id or self.conn is None or self.conn.closed:
+                return {"cancel_requested": False}
+            try:
+                cancel = getattr(self.conn, "cancel_safe", None) or self.conn.cancel
+                cancel()
+            except psycopg.Error as exc:
+                self._reconnect_required = bool(self.conn.closed or self.conn.broken)
+                raise ProtocolError("cancel_failed", "cancellation failed; reconnect if the query does not return",
+                                    sqlstate=exc.sqlstate, position=None) from None
+            return {"cancel_requested": True}
+
     def handle(self, method: str, params: dict) -> dict:
+        if method == "connect" and isinstance(params.get("conninfo"), str):
+            conninfo = params["conninfo"]
+            if conninfo:
+                self._secrets.add(conninfo)
+            try:
+                password = psycopg.conninfo.conninfo_to_dict(conninfo).get("password")
+                if password:
+                    self._secrets.add(password)
+            except psycopg.Error:
+                pass
+        if self._reconnect_required and method not in {"connect", "ping"}:
+            self._handle("connect", {"conninfo": self._conninfo})
+        try:
+            return self._handle(method, params)
+        except ProtocolError as exc:
+            if exc.details.get("sqlstate") == "57014":
+                # Explicit BEGIN also needs recovery; autocommit alone doesn't
+                # clear a user transaction left aborted by cancellation.
+                try:
+                    self.conn.rollback()
+                except psycopg.Error:
+                    self._reconnect_required = True
+                raise ProtocolError("cancelled", "Query cancelled", **exc.details) from None
+            if self.conn is not None and (self.conn.closed or self.conn.broken):
+                self._reconnect_required = True
+            raise ProtocolError(exc.code, self.redact(exc.message), **exc.details) from None
+
+    def _handle(self, method: str, params: dict) -> dict:
         if method == "ping":
             return {"pong": True}
         if method == "connect":
@@ -35,6 +91,10 @@ class Session:
                 ) from None
             old = self.conn
             self.conn = conn
+            if conn.info.password:
+                self._secrets.add(conn.info.password)
+            self._conninfo = conninfo
+            self._reconnect_required = False
             self.tables = TableStore()
             if old is not None:
                 old.close()
@@ -107,4 +167,4 @@ class Session:
                     "database_error", exc.diag.message_primary or "database error",
                     sqlstate=exc.sqlstate, position=None,
                 ) from None
-        raise ProtocolError("unknown_method", method)
+        raise ProtocolError("unknown_method", "unknown helper method")

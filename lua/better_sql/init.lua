@@ -30,13 +30,16 @@ local function connect(name, callback)
   M._connect_generation = (M._connect_generation or 0) + 1
   local generation = M._connect_generation
   local client = Client.new({ python = M.config.python })
-  client:start(function()
+  client:start(function(_, err, intentional)
     table_view.disconnect(client)
     if M.client == client then
       M.client = nil
       M.active_profile = nil
       M._catalog_generation = (M._catalog_generation or 0) + 1
       schema.set_connection(nil)
+      if not intentional then
+        vim.notify((err and err.message) or "Helper disconnected; run :BetterSqlReconnect", vim.log.levels.ERROR)
+      end
     end
   end)
   client:request("connect", { conninfo = conninfo }, function(err, result)
@@ -50,6 +53,7 @@ local function connect(name, callback)
       callback(err, nil)
       return
     end
+    local initial_catalog
     local function activate(switch_error)
       if generation ~= M._connect_generation then
         switch_error = { code = "connect_superseded", message = "connection attempt was superseded" }
@@ -68,20 +72,21 @@ local function connect(name, callback)
       if previous then
         previous:stop()
       end
-      local catalog_generation = M._catalog_generation or 0
+      schema.set_catalog(initial_catalog)
       callback(nil, result)
-      vim.schedule(function()
-        if M.client == client and (M._catalog_generation or 0) == catalog_generation then
-          M.refresh_schema()
-        end
-      end)
     end
-    -- Edits can arrive while the new helper is connecting.
-    if M._last_profile and M._last_profile ~= name then
-      table_view.before_switch(activate)
-    else
-      activate(nil)
-    end
+    -- A successful callback means the helper is ready for the next request.
+    client:request("catalog.load", {}, function(catalog_error, catalog)
+      initial_catalog = catalog
+      if catalog_error then
+        activate(catalog_error)
+      elseif M._last_profile and M._last_profile ~= name then
+        -- Edits can arrive while the new helper connects and loads its catalog.
+        table_view.before_switch(activate)
+      else
+        activate(nil)
+      end
+    end)
   end)
 end
 
@@ -98,6 +103,34 @@ function M.connect(name, callback)
   else
     connect(name, callback)
   end
+end
+
+function M.reconnect(callback)
+  callback = callback or function(err)
+    if err then vim.notify(err.message, vim.log.levels.ERROR) end
+  end
+  if not M._last_profile then
+    callback({ code = "not_connected", message = "Choose a profile with :BetterSqlConnect first" })
+    return
+  end
+  M.connect(M._last_profile, callback)
+end
+
+function M.cancel()
+  local active = M._active_query
+  if not active or not active.client.process or active.client.stopping then
+    vim.notify("No query is running", vim.log.levels.INFO)
+    return
+  end
+  active.client:cancel(active.id, function(err, result)
+    if err then
+      vim.notify(err.message, vim.log.levels.ERROR)
+    elseif result.cancel_requested then
+      vim.notify("Query cancellation requested", vim.log.levels.INFO)
+    else
+      vim.notify("Query has already finished", vim.log.levels.INFO)
+    end
+  end)
 end
 
 function M.refresh_schema(callback)
@@ -170,13 +203,20 @@ local function run(sql, source_buf, start_row, start_col)
     vim.notify("No SQL to run", vim.log.levels.WARN)
     return
   end
+  if M._active_query then
+    vim.notify("A query is running; use :BetterSqlCancel or wait", vim.log.levels.WARN)
+    return
+  end
+  local active = { client = M.client }
+  M._active_query = active
   local profile = M.active_profile
   local source_win = vim.api.nvim_get_current_win()
-  M.client:request("query.run", {
+  active.id = active.client:request("query.run", {
     sql = sql,
     max_rows = M.config.max_rows,
     max_bytes = M.config.max_bytes,
   }, function(err, result)
+    if M._active_query == active then M._active_query = nil end
     if err then
       local row, col = source_position(sql, start_row, start_col, err.position)
       M.last_query_error = {

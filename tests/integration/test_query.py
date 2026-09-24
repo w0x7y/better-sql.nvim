@@ -42,14 +42,23 @@ class QueryIntegrationTests(DatabaseTestCase):
             {"id": 1, "method": "connect", "params": {"conninfo": dsn}},
             {"id": 2, "method": "query.run", "params": {"sql": "select from", "max_rows": 1000, "max_bytes": 4194304}},
         ]
-        process = subprocess.run(
-            [sys.executable, str(helper)],
-            input="".join(json.dumps(request) + "\n" for request in requests),
-            text=True, capture_output=True, check=True,
-        )
-        self.assertNotIn("never-print-this-secret", process.stdout + process.stderr)
-        self.assertEqual(process.stderr, "")
-        replies = [json.loads(line) for line in process.stdout.splitlines()]
+        with subprocess.Popen(
+            [sys.executable, "-u", str(helper)], stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        ) as process:
+            replies = []
+            captured = ""
+            for request in requests:
+                process.stdin.write(json.dumps(request) + "\n")
+                process.stdin.flush()
+                line = process.stdout.readline()
+                captured += line
+                replies.append(json.loads(line))
+            process.stdin.close()
+            process.wait(timeout=3)
+            stderr = process.stderr.read()
+        self.assertNotIn("never-print-this-secret", captured + stderr)
+        self.assertEqual(stderr, "")
         self.assertTrue(replies[0]["ok"])
         self.assertEqual(replies[0]["result"], {
             "database": self.conn.info.dbname,

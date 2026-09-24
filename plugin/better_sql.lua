@@ -45,3 +45,11 @@ end, {})
 vim.keymap.set("x", "<leader>sr", function()
   require("better_sql").run_visual()
 end, { desc = "Run selected SQL" })
+
+vim.api.nvim_create_user_command("BetterSqlCancel", function()
+  require("better_sql").cancel()
+end, {})
+
+vim.api.nvim_create_user_command("BetterSqlReconnect", function()
+  require("better_sql").reconnect()
+end, {})

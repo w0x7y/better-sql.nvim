@@ -58,3 +58,19 @@ assert(first_error.code == "connect_superseded")
 assert(type(first_error.message) == "string" and first_error.message ~= "")
 assert(first_result == nil)
 assert(second_calls == 1, "latest connection completed more than once")
+
+-- The connection callback includes initial catalog loading, including failure.
+local failed_calls, failed_error = 0, nil
+better_sql.connect("first", function(err)
+  failed_calls, failed_error = failed_calls + 1, err
+end)
+local catalog_reply
+clients[3].request = function(_, method, _, callback)
+  assert(method == "catalog.load")
+  catalog_reply = callback
+end
+clients[3].reply(nil, { database = "first", user = "test" })
+assert(failed_calls == 0 and better_sql.client == clients[2], "connect completed before its catalog")
+catalog_reply({ code = "helper_exited", message = "helper exited during catalog loading" })
+assert(failed_calls == 1 and failed_error.code == "helper_exited")
+assert(clients[3].stopped and better_sql.client == clients[2], "failed catalog replaced the usable connection")

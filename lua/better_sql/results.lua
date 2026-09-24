@@ -106,7 +106,8 @@ function M.show_error(err, profile_name)
   if err.sqlstate then
     message = message .. " [" .. err.sqlstate .. "]"
   end
-  return M.show({ sets = { { columns = {}, rows = {}, status = "Error: " .. message } } }, profile_name)
+  local label = err.code == "cancelled" and "Cancelled: " or "Error: "
+  return M.show({ sets = { { columns = {}, rows = {}, status = label .. message } } }, profile_name)
 end
 
 return M

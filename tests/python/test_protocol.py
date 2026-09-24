@@ -46,20 +46,22 @@ class ProtocolTests(unittest.TestCase):
 
     def test_entry_point_handles_ping_and_unknown_method(self):
         helper = pathlib.Path(__file__).resolve().parents[2] / "python" / "better_sql_helper.py"
-        process = subprocess.run(
-            [sys.executable, str(helper)],
-            input='{"id":1,"method":"ping","params":{}}\n'
-                  '{"id":2,"method":"missing","params":{}}\n',
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-
-        self.assertEqual(process.stderr, "")
-        self.assertEqual([json.loads(line) for line in process.stdout.splitlines()], [
+        replies = []
+        with subprocess.Popen(
+            [sys.executable, "-u", str(helper)], stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        ) as process:
+            for request in ({"id": 1, "method": "ping"}, {"id": 2, "method": "missing"}):
+                process.stdin.write(json.dumps(request) + "\n")
+                process.stdin.flush()
+                replies.append(json.loads(process.stdout.readline()))
+            process.stdin.close()
+            process.wait(timeout=3)
+            self.assertEqual(process.stderr.read(), "")
+        self.assertEqual(replies, [
             {"id": 1, "ok": True, "result": {"pong": True}},
             {"id": 2, "ok": False,
-             "error": {"code": "unknown_method", "message": "missing"}},
+             "error": {"code": "unknown_method", "message": "unknown helper method"}},
         ])
 
     def assert_error_response(self, request, request_id, code, handler=None):

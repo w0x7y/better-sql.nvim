@@ -58,7 +58,9 @@ class QueryTests(unittest.TestCase):
 
     def test_unknown_method_and_ping_remain_operational(self):
         sink = io.StringIO()
-        serve(io.StringIO('{"id":1,"method":"ping"}\n{"id":2,"method":"missing"}\n'), sink, Session().handle)
+        session = Session()
+        serve(io.StringIO('{"id":1,"method":"ping"}\n'), sink, session.handle)
+        serve(io.StringIO('{"id":2,"method":"missing"}\n'), sink, session.handle)
         responses = [json.loads(line) for line in sink.getvalue().splitlines()]
         self.assertEqual(responses[0]["result"], {"pong": True})
         self.assertEqual(responses[1]["error"]["code"], "unknown_method")
