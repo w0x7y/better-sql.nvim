@@ -2,6 +2,7 @@
 
 import psycopg
 
+from better_sql.catalog import load_catalog
 from better_sql.protocol import ProtocolError
 from better_sql.query import run_query
 
@@ -33,6 +34,16 @@ class Session:
             if old is not None:
                 old.close()
             return {"database": conn.info.dbname, "user": conn.info.user}
+        if method == "catalog.load":
+            if self.conn is None:
+                raise ProtocolError("not_connected", "connect to a database first")
+            try:
+                return load_catalog(self.conn)
+            except psycopg.Error as exc:
+                raise ProtocolError(
+                    "database_error", exc.diag.message_primary or "database error",
+                    sqlstate=exc.sqlstate, position=None,
+                ) from None
         if method == "query.run":
             if self.conn is None:
                 raise ProtocolError("not_connected", "connect to a database first")
