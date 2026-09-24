@@ -2,14 +2,13 @@
 
 import sys
 
-from better_sql.protocol import ProtocolError, serve
-
-
-def handle(method: str, params: dict) -> dict:
-    if method == "ping":
-        return {"pong": True}
-    raise ProtocolError("unknown_method", method)
+from better_sql.protocol import serve
+from better_sql.session import Session
 
 
 if __name__ == "__main__":
-    serve(sys.stdin, sys.stdout, handle)
+    session = Session()
+    try:
+        serve(sys.stdin, sys.stdout, session.handle)
+    finally:
+        session.close()

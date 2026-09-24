@@ -4,15 +4,16 @@ import json
 
 
 class ProtocolError(Exception):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, **details):
         super().__init__(message)
         self.code = code
         self.message = message
+        self.details = details
 
 
 def encode_error(exc: Exception) -> dict:
     if isinstance(exc, ProtocolError):
-        return {"code": exc.code, "message": exc.message}
+        return {"code": exc.code, "message": exc.message, **exc.details}
     if isinstance(exc, json.JSONDecodeError):
         return {"code": "invalid_json", "message": str(exc)}
     return {"code": "internal_error", "message": str(exc)}
