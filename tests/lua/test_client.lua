@@ -56,6 +56,25 @@ assert(exit_error.code == "helper_exited")
 assert(exit_status.code == 0)
 vim.fn.delete(exit_helper)
 
+local restarting = Client.new({ python = "python3" })
+local old_exit
+restarting:start(function(status)
+  old_exit = status
+end)
+assert(not pcall(restarting.start, restarting), "start accepted a second active process")
+restarting:stop()
+assert(not pcall(restarting.start, restarting), "start raced the old process exit")
+assert(vim.wait(3000, function() return old_exit ~= nil end), "old helper did not exit")
+local new_reply
+restarting:start()
+restarting:request("ping", {}, function(err, result)
+  assert(err == nil, vim.inspect(err))
+  new_reply = result.pong
+end)
+assert(vim.wait(3000, function() return new_reply ~= nil end), "restarted helper lost its request")
+assert(new_reply == true)
+restarting:stop()
+
 local better_sql = require("better_sql")
 better_sql.setup({ connections = { local_db = "service=local" } })
 assert(better_sql.config.connections.local_db == "service=local")

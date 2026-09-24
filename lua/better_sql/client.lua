@@ -44,8 +44,10 @@ function Client:_on_stdout(chunk)
 end
 
 function Client:start(on_exit)
+  assert(not self.process, "better_sql helper is already running")
   local helper = self.helper or vim.api.nvim_get_runtime_file("python/better_sql_helper.py", false)[1]
   assert(helper, "better_sql helper was not found on runtimepath")
+  self.stdout_buffer = ""
   self.process = vim.system({ self.python, "-u", helper }, {
     stdin = true,
     stdout = function(_, chunk)
@@ -54,6 +56,7 @@ function Client:start(on_exit)
     stderr = function() end,
   }, function(result)
     self.process = nil
+    self.stopping = false
     local pending = self.callbacks
     self.callbacks = {}
     vim.schedule(function()
@@ -70,7 +73,7 @@ function Client:start(on_exit)
 end
 
 function Client:request(method, params, callback)
-  assert(self.process, "better_sql helper is not running")
+  assert(self.process and not self.stopping, "better_sql helper is not running")
   self.next_id = self.next_id + 1
   local id = self.next_id
   self.callbacks[id] = callback
@@ -83,9 +86,9 @@ function Client:request(method, params, callback)
 end
 
 function Client:stop()
-  if self.process then
+  if self.process and not self.stopping then
+    self.stopping = true
     self.process:write(nil)
-    self.process = nil
   end
 end
 
