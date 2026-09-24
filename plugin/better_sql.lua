@@ -18,3 +18,16 @@ vim.api.nvim_create_user_command("BetterSqlConnect", function()
     end)
   end)
 end, {})
+
+vim.api.nvim_create_user_command("BetterSqlRun", function(opts)
+  local range = opts.range > 0 and { opts.line1, opts.line2 } or nil
+  require("better_sql").run(range)
+end, { range = true })
+
+vim.api.nvim_create_user_command("BetterSqlRunBuffer", function()
+  require("better_sql").run_buffer()
+end, {})
+
+vim.keymap.set("x", "<leader>sr", function()
+  require("better_sql").run_visual()
+end, { desc = "Run selected SQL" })
