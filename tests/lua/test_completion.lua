@@ -34,9 +34,11 @@ local function expect(sql, wanted, cursor_col)
 end
 
 expect("SELECT * FROM us", { "users" })
+expect("SELECT * FROM users", { "users" }, #"SELECT * FROM us")
 expect("SELECT * FROM users JOIN or", { "orders" })
 expect("SELECT users.", { "email", "id", "username" })
 expect("SELECT users.us", { "username" })
+expect("SELECT users.username", { "username" }, #"SELECT users.us")
 expect("SELECT u.\nFROM users u", { "email", "id", "username" }, #"SELECT u.")
 expect("SELECT u.\nFROM public.users AS u", { "email", "id", "username" }, #"SELECT u.")
 expect("SELECT o.\nFROM users u JOIN orders o ON u.id = o.order_id", { "order_id" }, #"SELECT o.")
@@ -44,6 +46,7 @@ expect('SELECT "Mixed Case".', { '"Full Name"' })
 expect('SELECT m. FROM "Mixed Case" m', { '"Full Name"' }, #"SELECT m.")
 expect('SELECT m. FROM "public"."Mixed Case" m', { '"Full Name"' }, #"SELECT m.")
 expect("SELECT * FROM other.us", { "users" })
+expect("SELECT * FROM other.users", { "users" }, #"SELECT * FROM other.us")
 expect("SELECT other.users.", { "other_id" })
 expect("SELECT * FROM public.", { '"Mixed Case"', "orders", "users" })
 expect("SELECT * FROM users; SELECT * FROM or", { "orders" })
@@ -53,6 +56,19 @@ expect("SELECT 'users.'", {})
 expect("SELECT $$users.$$", {})
 expect("SELECT /* users. */ 1", {})
 expect("SELECT u. -- earlier alias\nFROM users u", { "email", "id", "username" }, #"SELECT u.")
+expect("SELECT u. FROM users u WHERE EXISTS (SELECT 1 FROM orders u)",
+  { "email", "id", "username" }, #"SELECT u.")
+local inner_sql = "SELECT 1 FROM users u WHERE EXISTS (SELECT u. FROM orders u)"
+expect(inner_sql, { "order_id" }, inner_sql:find("SELECT u.", 1, true) - 1 + #"SELECT u.")
+local correlated_sql = "SELECT 1 FROM users u WHERE EXISTS (SELECT u. FROM orders o)"
+expect(correlated_sql, { "email", "id", "username" },
+  correlated_sql:find("SELECT u.", 1, true) - 1 + #"SELECT u.")
+expect("SELECT u. FROM users u WHERE EXISTS (SELECT 'FROM orders u' /* FROM orders u */)",
+  { "email", "id", "username" }, #"SELECT u.")
+expect("SELECT u. FROM users u /* (SELECT 1 FROM orders u) */",
+  { "email", "id", "username" }, #"SELECT u.")
+expect("SELECT u. FROM users u WHERE 'text' = '(SELECT 1 FROM orders u)'",
+  { "email", "id", "username" }, #"SELECT u.")
 
 schema.set_catalog(catalog)
 better_sql.setup()
@@ -118,12 +134,24 @@ assert(vim.wait(1000, function() return vim.fn.getftype(socket) == "socket" end)
 local rpc = vim.fn.sockconnect("pipe", socket, { rpc = true })
 assert(rpc > 0, "could not connect to completion smoke Neovim")
 vim.fn.rpcrequest(rpc, "nvim_exec_lua", [[
+  local dsn, table_name = ...
   vim.opt.runtimepath:append(vim.fn.getcwd())
-  require("better_sql.schema").set_catalog(...)
-  require("better_sql").setup()
+  local better_sql = require("better_sql")
+  local schema = require("better_sql.schema")
+  better_sql.setup({ connections = { local_db = dsn }, python = ".venv/bin/python" })
+  local connected, connect_error
+  better_sql.connect("local_db", function(err)
+    connected, connect_error = true, err
+  end)
+  assert(vim.wait(3000, function() return connected end), "popup smoke connection timed out")
+  assert(connect_error == nil, vim.inspect(connect_error))
+  assert(vim.wait(3000, function() return schema.get_catalog() ~= nil end),
+    "popup smoke catalog timed out")
   vim.bo.filetype = "sql"
-]], { catalog })
-vim.fn.rpcrequest(rpc, "nvim_input", "iSELECT users.")
+  vim.api.nvim_buf_set_lines(0, 0, -1, false, { "SELECT u", "FROM public." .. table_name .. " u" })
+  vim.api.nvim_win_set_cursor(0, { 1, #"SELECT u" - 1 })
+]], { dsn, table_name })
+vim.fn.rpcrequest(rpc, "nvim_input", "A.")
 local opened = vim.wait(1000, function()
   return vim.fn.rpcrequest(rpc, "nvim_eval", "pumvisible()") == 1
 end)
@@ -132,8 +160,7 @@ vim.fn.rpcnotify(rpc, "nvim_input", "\27")
 vim.fn.chanclose(rpc)
 vim.fn.jobstop(child)
 assert(opened, "typing a dot did not open the completion menu")
-assert(#popup == 3 and popup[1].word == "id" and popup[2].word == "username"
-  and popup[3].word == "email", vim.inspect(popup))
+assert(#popup == 2 and popup[1].word == "id" and popup[2].word == "username", vim.inspect(popup))
 
 local dropped, drop_error
 better_sql.client:request("query.run", {

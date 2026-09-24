@@ -57,6 +57,29 @@ local function keyword(token, value)
   return is_name(token) and not token.quoted and token.value == value
 end
 
+local function query_scopes(items)
+  local current, next_scope = 0, 0
+  local parents, stack = {}, {}
+  for index, token in ipairs(items) do
+    if token.value == "(" then
+      token.scope = current
+      stack[#stack + 1] = current
+      if keyword(items[index + 1], "select") or keyword(items[index + 1], "with") then
+        next_scope = next_scope + 1
+        parents[next_scope] = current
+        current = next_scope
+      end
+    elseif token.value == ")" then
+      token.scope = current
+      current = stack[#stack] or 0
+      stack[#stack] = nil
+    else
+      token.scope = current
+    end
+  end
+  return current, parents
+end
+
 local function relation_after(items, index)
   local first = items[index + 1]
   if not is_name(first) then return nil end
@@ -68,8 +91,8 @@ local function relation_after(items, index)
   return { name = first.value }, index + 1
 end
 
-local function aliases(items)
-  local result = {}
+local function aliases(items, scope, parents, qualifier)
+  local scoped = {}
   for index, token in ipairs(items) do
     if keyword(token, "from") or keyword(token, "join") then
       local relation, last = relation_after(items, index)
@@ -80,14 +103,20 @@ local function aliases(items)
           "on", "using", "where", "join", "left", "right", "full", "inner", "cross", "natural",
           "group", "order", "limit", "offset", "having", "union", "returning",
         }, alias.value) then
-          result[alias.value] = relation
+          scoped[token.scope] = scoped[token.scope] or {}
+          scoped[token.scope][alias.value] = relation
         elseif is_name(alias) and alias.quoted then
-          result[alias.value] = relation
+          scoped[token.scope] = scoped[token.scope] or {}
+          scoped[token.scope][alias.value] = relation
         end
       end
     end
   end
-  return result
+  while scope do
+    if scoped[scope] and scoped[scope][qualifier] then return scoped[scope][qualifier] end
+    scope = parents[scope]
+  end
+  return nil
 end
 
 local function find_relation(catalog, schema_name, relation_name)
@@ -128,11 +157,10 @@ function M.suggest(sql, cursor_col, catalog)
   local selected = statement.at_cursor({ sql }, 0, cursor_col)
   if not selected then return {} end
   local items = tokens(selected.sql)
+  local _, parents = query_scopes(items)
   local cursor = cursor_col - selected.start_col
-  local before = {}
-  for _, token in ipairs(items) do
-    if token.last <= cursor then before[#before + 1] = token end
-  end
+  local before = tokens(selected.sql:sub(1, cursor))
+  local scope = query_scopes(before)
   local index = #before
   local prefix = ""
   if is_name(before[index]) and before[index].last == cursor then
@@ -165,7 +193,7 @@ function M.suggest(sql, cursor_col, catalog)
   end
   if not qualified then return {} end
   local relation_name = qualifier.value
-  local alias = aliases(items)[relation_name]
+  local alias = aliases(items, scope, parents, relation_name)
   if alias then
     relation_name, schema_name = alias.name, alias.schema
   end
