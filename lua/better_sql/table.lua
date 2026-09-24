@@ -50,6 +50,17 @@ local function view_for_current_buffer()
   return views[vim.api.nvim_get_current_buf()]
 end
 
+local function pending_count(state)
+  local count = 0
+  for _, changes in pairs(state.pending) do count = count + vim.tbl_count(changes) end
+  return count
+end
+
+local function displayed_cell(state, row, col)
+  local changes = state.pending[row.handle]
+  return changes and changes[state.page.columns[col].name] or row.cells[col]
+end
+
 local function selected_cell(state)
   local row = state.page and state.page.rows[state.selected_row]
   local column = state.page and state.page.columns[state.selected_col]
@@ -58,7 +69,7 @@ local function selected_cell(state)
     row_handle = row.handle,
     column_name = column.name,
     row_index = state.selected_row,
-    cell = row.cells[state.selected_col],
+    cell = displayed_cell(state, row, state.selected_col),
   }
 end
 
@@ -169,13 +180,16 @@ local function write_page(state)
       lines[2] = lines[2] .. "  Read-only: " .. (page.read_only_reason or "Relation is read-only")
     end
   end
+  lines[2] = lines[2] .. "  Pending: " .. pending_count(state)
+  if state.needs_reload then lines[2] = lines[2] .. "  Reconnect and press r to reload and review edits" end
+  if state.saving then lines[2] = lines[2] .. "  Saving..." end
   lines[3] = "Cell: no row selected"
 
   local widths = {}
   for col, column in ipairs(page.columns or {}) do
     widths[col] = math.min(CELL_WIDTH, math.max(4, vim.fn.strdisplaywidth(column.name)))
     for _, row in ipairs(page.rows or {}) do
-      widths[col] = math.min(CELL_WIDTH, math.max(widths[col], vim.fn.strdisplaywidth(cell_text(row.cells[col]))))
+      widths[col] = math.min(CELL_WIDTH, math.max(widths[col], 1 + vim.fn.strdisplaywidth(cell_text(displayed_cell(state, row, col)))))
     end
   end
   local function make_line(values, row_handle)
@@ -199,7 +213,10 @@ local function write_page(state)
   state.positions = {}
   for index, row in ipairs(page.rows or {}) do
     local values = {}
-    for col, cell in ipairs(row.cells) do values[col] = cell_text(cell) end
+    for col in ipairs(row.cells) do
+      local dirty = state.pending[row.handle] and state.pending[row.handle][page.columns[col].name]
+      values[col] = (dirty and "*" or "") .. cell_text(displayed_cell(state, row, col))
+    end
     local line, spans = make_line(values, row.handle)
     lines[DATA_START + index - 1] = line
     state.positions[DATA_START + index - 1] = spans
@@ -214,28 +231,216 @@ local function write_page(state)
   end
 end
 
+local function retained_handles(state)
+  local handles = {}
+  for _, view in pairs(views) do
+    if view.client == state.client and not view.needs_reload then
+      for handle in pairs(view.pending) do
+        if not view.stale[handle] then handles[handle] = true end
+      end
+      -- A helper serves all grids. Keep other visible rows usable as well.
+      if view ~= state or state.recovering then
+        for _, row in ipairs(view.page.rows) do
+          if type(row.handle) == "string" and not view.stale[row.handle] then handles[row.handle] = true end
+        end
+      end
+    end
+  end
+  local result = vim.tbl_keys(handles)
+  table.sort(result)
+  return result
+end
+
+local function accept_rows(state, page)
+  for index, row in ipairs(page.rows) do
+    for handle in pairs(state.pending) do
+      if vim.deep_equal(state.keys[handle], row.key) then
+        if state.stale[handle] then
+          state.pending[row.handle] = state.pending[handle]
+          state.keys[row.handle] = row.key
+          state.pending[handle], state.keys[handle], state.stale[handle] = nil, nil, nil
+          state.loaded_rows[handle] = nil
+        else
+          -- Keep the original version until an explicit reload or successful save.
+          row = state.loaded_rows[handle]
+          page.rows[index] = row
+        end
+        break
+      end
+    end
+    if type(row.handle) == "string" then state.loaded_rows[row.handle] = row end
+  end
+end
+
+local function show_unmatched_rows(state)
+  local visible = {}
+  for _, row in ipairs(state.page.rows) do
+    if type(row.handle) == "string" then visible[row.handle] = true end
+  end
+  local handles = vim.tbl_keys(state.stale)
+  table.sort(handles)
+  for _, handle in ipairs(handles) do
+    if not visible[handle] and state.loaded_rows[handle] then
+      state.page.rows[#state.page.rows + 1] = state.loaded_rows[handle]
+    end
+  end
+end
+
 local function request_page(state, offset)
-  if state.loading or not state.client then return end
+  if state.loading or state.saving or not state.client or state.needs_reload then return end
   state.loading = true
+  state.generation = state.generation + 1
   state.error = nil
   write_page(state)
-  local retain_handles = vim.tbl_keys(state.pending or {})
-  table.sort(retain_handles)
-  state.client:request("table.page", {
-    schema = state.relation.schema,
-    table = state.relation.name,
-    offset = offset,
-    retain_handles = retain_handles,
-  }, function(err, page)
-    if not vim.api.nvim_buf_is_valid(state.buf) or views[state.buf] ~= state then return end
-    state.loading = false
+  local client = state.client
+  local generation = state.generation
+  local function fetch(next_offset)
+    client:request("table.page", {
+      schema = state.relation.schema, table = state.relation.name,
+      offset = next_offset, retain_handles = retained_handles(state),
+    }, function(err, page)
+      if views[state.buf] ~= state or state.client ~= client or state.generation ~= generation then return end
+      if err then
+        state.error = err.message or err.code or "Page request failed"
+      else
+        accept_rows(state, page)
+        if not state.recovering or next_offset == offset then state.page = page end
+        if state.recovering and next(state.stale) and page.has_more then
+          fetch(next_offset + PAGE_SIZE)
+          return
+        end
+        state.error = nil
+        if state.recovering and next(state.stale) then
+          state.error = "Unmatched rows after reload; review and discard their pending cells with u"
+          show_unmatched_rows(state)
+        end
+      end
+      if state.recovering and err then show_unmatched_rows(state) end
+      state.loading, state.recovering = false, false
+      local visible = {}
+      for _, row in ipairs(state.page.rows) do
+        if type(row.handle) == "string" then visible[row.handle] = true end
+      end
+      for handle in pairs(state.loaded_rows) do
+        if not state.pending[handle] and not visible[handle] then state.loaded_rows[handle] = nil end
+      end
+      write_page(state)
+    end)
+  end
+  fetch(offset)
+end
+
+local function blocked_reason(state, handle, column_name)
+  if state.loading then return "Wait for rows to load before editing" end
+  if state.needs_reload or state.stale[handle] then return "Reload and review this row before editing" end
+  if not state.page.editable then return state.page.read_only_reason or "Relation is read-only" end
+  for _, column in ipairs(state.page.columns) do
+    if column.name == column_name then
+      if not column.editable then return column.read_only_reason or "Column is read-only" end
+      return nil
+    end
+  end
+  return "Unknown column"
+end
+
+local function stage(state, handle, column, text, is_null)
+  local reason = blocked_reason(state, handle, column)
+  if reason then vim.notify("Read-only: " .. reason, vim.log.levels.WARN); return end
+  local row = state.loaded_rows[handle]
+  if not row then return end
+  state.pending[handle] = state.pending[handle] or {}
+  state.keys[handle] = vim.deepcopy(row.key)
+  state.pending[handle][column] = { text = text, is_null = is_null }
+  write_page(state)
+end
+
+local function edit_cell(state, null)
+  sync_cursor(state)
+  local selection = selected_cell(state)
+  if not selection then return end
+  local reason = blocked_reason(state, selection.row_handle, selection.column_name)
+  if reason then vim.notify("Read-only: " .. reason, vim.log.levels.WARN); return end
+  if null then stage(state, selection.row_handle, selection.column_name, "", true); return end
+  local generation = state.generation
+  vim.ui.input({ prompt = selection.column_name .. ": ", default = selection.cell.text }, function(text)
+    if text ~= nil and views[state.buf] == state and state.generation == generation then
+      stage(state, selection.row_handle, selection.column_name, text, false)
+    end
+  end)
+end
+
+local function save(state, callback)
+  callback = callback or function() end
+  local function failure(code, message)
+    local err = { code = code, message = message }
+    state.error = message
+    write_page(state)
+    callback(err)
+  end
+  if state.loading or state.saving then failure("busy", "Wait for the current table operation"); return end
+  if not state.client or state.needs_reload or next(state.stale) then
+    failure("reload_required", "Reload and review pending rows before saving; discard unmatched cells with u")
+    return
+  end
+  if not next(state.pending) then callback(nil, { rows = {} }); return end
+  local snapshot = {}
+  local edits = {}
+  local handles = vim.tbl_keys(state.pending)
+  table.sort(handles)
+  for _, handle in ipairs(handles) do
+    snapshot[handle] = {}
+    local changes = {}
+    local columns = vim.tbl_keys(state.pending[handle])
+    table.sort(columns)
+    for _, column in ipairs(columns) do
+      local value = state.pending[handle][column]
+      snapshot[handle][column] = value
+      changes[#changes + 1] = { column = column, text = value.text, is_null = value.is_null }
+    end
+    edits[#edits + 1] = { handle = handle, changes = changes }
+  end
+  state.saving, state.error = true, nil
+  write_page(state)
+  local client, generation = state.client, state.generation
+  client:request("table.save", { schema = state.relation.schema, table = state.relation.name, edits = edits }, function(err, result)
+    if views[state.buf] ~= state or state.client ~= client or state.generation ~= generation then
+      callback({ code = "connection_changed", message = "Connection changed during save; reload and review edits" })
+      return
+    end
+    state.saving = false
     if err then
-      state.error = err.message or err.code or "Page request failed"
+      local details = err.message or err.code or "Save failed"
+      if type(err.handle) == "string" then
+        local values = {}
+        for _, value in ipairs(state.keys[err.handle] or {}) do values[#values + 1] = cell_text(value) end
+        details = details .. "  Row: [" .. table.concat(values, ", ") .. "]"
+      end
+      if type(err.column) == "string" then
+        details = details .. "  Column: " .. err.column
+      elseif type(err.columns) == "table" and #err.columns > 0 then
+        details = details .. "  Columns: " .. table.concat(err.columns, ", ")
+      end
+      if type(err.sqlstate) == "string" then details = details .. "  SQLSTATE: " .. err.sqlstate end
+      state.error = details
     else
-      state.page = page
+      for _, row in ipairs(result.rows) do
+        state.loaded_rows[row.handle] = row
+        for index, current in ipairs(state.page.rows) do
+          if current.handle == row.handle then state.page.rows[index] = row end
+        end
+        for column, value in pairs(snapshot[row.handle] or {}) do
+          if state.pending[row.handle] and state.pending[row.handle][column] == value then
+            state.pending[row.handle][column] = nil
+          end
+        end
+        if state.pending[row.handle] and not next(state.pending[row.handle]) then
+          state.pending[row.handle], state.keys[row.handle] = nil, nil
+        end
+      end
       state.error = nil
     end
     write_page(state)
+    callback(err, result)
   end)
 end
 
@@ -253,6 +458,7 @@ local function create_view(client, relation, profile)
     page = { columns = relation and relation.columns or {}, rows = {}, offset = 0,
       has_more = false, editable = true },
     selected_row = 1, selected_col = 1, positions = {}, pending = {},
+    loaded_rows = {}, keys = {}, stale = {}, generation = 0,
   }
   views[buf] = state
   M.current_buffer = buf
@@ -264,6 +470,15 @@ local function create_view(client, relation, profile)
     { buffer = buf, desc = "Next table row" })
   vim.keymap.set("n", "k", function() sync_cursor(state); move_to_cell(state, state.selected_row - 1, state.selected_col) end,
     { buffer = buf, desc = "Previous table row" })
+  vim.keymap.set("n", "e", function() edit_cell(state, false) end, { buffer = buf, desc = "Edit table cell" })
+  vim.keymap.set("n", "N", function() edit_cell(state, true) end, { buffer = buf, desc = "Set cell to SQL NULL" })
+  vim.keymap.set("n", "u", function()
+    sync_cursor(state)
+    local selection = selected_cell(state)
+    if selection then M.discard(selection.row_handle, selection.column_name) end
+  end, { buffer = buf, desc = "Discard cell edit" })
+  vim.keymap.set("n", "s", function() save(state) end, { buffer = buf, desc = "Save pending table edits" })
+  vim.keymap.set("n", "r", function() M.reload() end, { buffer = buf, desc = "Reload and review staged edits" })
   vim.keymap.set("n", "]p", function() M.next_page() end, { buffer = buf, desc = "Next table page" })
   vim.keymap.set("n", "[p", function() M.previous_page() end, { buffer = buf, desc = "Previous table page" })
   vim.keymap.set("n", "K", function() sync_cursor(state); show_detail(state) end,
@@ -283,6 +498,7 @@ end
 function M.render(page)
   local state = create_view(nil, nil, nil)
   state.page = page
+  accept_rows(state, page)
   write_page(state)
   return state.buf
 end
@@ -307,6 +523,123 @@ end
 function M.current_cell()
   local state = view_for_current_buffer()
   return state and selected_cell(state) or nil
+end
+
+function M.stage(handle, column, text, is_null)
+  local state = view_for_current_buffer()
+  if state then stage(state, handle, column, text, is_null) end
+end
+
+function M.discard(handle, column)
+  local state = view_for_current_buffer()
+  if not state or not state.pending[handle] then return end
+  state.pending[handle][column] = nil
+  if not next(state.pending[handle]) then
+    state.pending[handle], state.keys[handle] = nil, nil
+    if state.stale[handle] then
+      state.stale[handle] = nil
+      for index, row in ipairs(state.page.rows) do
+        if row.handle == handle then table.remove(state.page.rows, index); break end
+      end
+    end
+  end
+  write_page(state)
+end
+
+function M.pending_count()
+  local state = view_for_current_buffer()
+  return state and pending_count(state) or 0
+end
+
+function M.save(callback)
+  local state = view_for_current_buffer()
+  if state then save(state, callback)
+  elseif callback then callback({ code = "no_table", message = "Select a table grid first" }) end
+end
+
+function M.reload()
+  local state = view_for_current_buffer()
+  if not state or not state.client or state.loading or state.saving then return end
+  state.stale = {}
+  for handle in pairs(state.pending) do state.stale[handle] = true end
+  for handle in pairs(state.loaded_rows) do
+    if not state.pending[handle] then state.loaded_rows[handle] = nil end
+  end
+  state.needs_reload, state.recovering = false, true
+  state.page.rows = {}
+  request_page(state, 0)
+end
+
+local function invalidate(state)
+  state.generation = state.generation + 1
+  state.loading, state.saving, state.recovering = false, false, false
+  state.needs_reload = true
+  for handle in pairs(state.pending) do state.stale[handle] = true end
+  show_unmatched_rows(state)
+  write_page(state)
+end
+
+function M.disconnect(client)
+  for _, state in pairs(views) do
+    if state.client == client then state.client = nil; invalidate(state) end
+  end
+end
+
+function M.set_connection(client, profile)
+  for _, state in pairs(views) do
+    if state.relation then
+      state.client = state.profile == profile and client or nil
+      invalidate(state)
+    end
+  end
+end
+
+function M.before_switch(callback)
+  local dirty = {}
+  for _, state in pairs(views) do
+    if state.saving then
+      callback({ code = "busy", message = "Wait for the table save before switching profiles" })
+      return
+    end
+    if next(state.pending) then dirty[#dirty + 1] = state end
+  end
+  if #dirty == 0 then callback(nil); return end
+  vim.ui.select({ "Save", "Discard", "Stay" }, { prompt = "Pending table edits before switching profiles:" }, function(choice)
+    dirty = {}
+    for _, state in pairs(views) do
+      if state.saving then
+        callback({ code = "busy", message = "Wait for the table save before switching profiles" })
+        return
+      end
+      if next(state.pending) then dirty[#dirty + 1] = state end
+    end
+    if choice == "Discard" then
+      for _, state in ipairs(dirty) do
+        state.pending, state.keys, state.stale = {}, {}, {}
+        write_page(state)
+      end
+      callback(nil)
+    elseif choice == "Save" then
+      local function save_next(index)
+        if index > #dirty then
+          for _, state in pairs(views) do
+            if next(state.pending) then
+              callback({ code = "pending_changed", message = "New edits remain pending; review before switching profiles" })
+              return
+            end
+          end
+          callback(nil)
+          return
+        end
+        save(dirty[index], function(err)
+          if err then callback(err) else save_next(index + 1) end
+        end)
+      end
+      save_next(1)
+    else
+      callback({ code = "switch_cancelled", message = "Profile switch cancelled; pending edits retained" })
+    end
+  end)
 end
 
 return M

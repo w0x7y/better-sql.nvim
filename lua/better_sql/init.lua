@@ -17,7 +17,7 @@ end
 
 M.setup()
 
-function M.connect(name, callback)
+local function connect(name, callback)
   callback = callback or function() end
   local conninfo = M.config.connections[name]
   if type(conninfo) ~= "string" or conninfo == "" then
@@ -29,6 +29,7 @@ function M.connect(name, callback)
   local generation = M._connect_generation
   local client = Client.new({ python = M.config.python })
   client:start(function()
+    table_view.disconnect(client)
     if M.client == client then
       M.client = nil
       M.active_profile = nil
@@ -47,21 +48,54 @@ function M.connect(name, callback)
       callback(err, nil)
       return
     end
-    local previous = M.client
-    M.client = client
-    M.active_profile = name
-    schema.set_connection(name)
-    if previous then
-      previous:stop()
-    end
-    local catalog_generation = M._catalog_generation or 0
-    callback(nil, result)
-    vim.schedule(function()
-      if M.client == client and (M._catalog_generation or 0) == catalog_generation then
-        M.refresh_schema()
+    local function activate(switch_error)
+      if generation ~= M._connect_generation then
+        switch_error = { code = "connect_superseded", message = "connection attempt was superseded" }
       end
-    end)
+      if switch_error then
+        client:stop()
+        callback(switch_error, nil)
+        return
+      end
+      local previous = M.client
+      M.client = client
+      M.active_profile = name
+      M._last_profile = name
+      table_view.set_connection(client, name)
+      schema.set_connection(name)
+      if previous then
+        previous:stop()
+      end
+      local catalog_generation = M._catalog_generation or 0
+      callback(nil, result)
+      vim.schedule(function()
+        if M.client == client and (M._catalog_generation or 0) == catalog_generation then
+          M.refresh_schema()
+        end
+      end)
+    end
+    -- Edits can arrive while the new helper is connecting.
+    if M._last_profile and M._last_profile ~= name then
+      table_view.before_switch(activate)
+    else
+      activate(nil)
+    end
   end)
+end
+
+function M.connect(name, callback)
+  callback = callback or function() end
+  if type(M.config.connections[name]) ~= "string" or M.config.connections[name] == "" then
+    callback({ code = "unknown_profile", message = "connection profile was not found" }, nil)
+    return
+  end
+  if M._last_profile and M._last_profile ~= name then
+    table_view.before_switch(function(err)
+      if err then callback(err, nil) else connect(name, callback) end
+    end)
+  else
+    connect(name, callback)
+  end
 end
 
 function M.refresh_schema(callback)
