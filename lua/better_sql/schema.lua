@@ -121,6 +121,8 @@ function M.show(on_open_relation)
     local node = state.line_nodes[vim.api.nvim_win_get_cursor(0)[1]]
     if not node then return end
     if node.kind == "relation" then
+      state.expanded[node.id] = state.expanded[node.id] == false
+      render_tree(state)
       state.on_open_relation(node.schema, node.name)
     elseif node.kind == "schema" then
       state.expanded[node.id] = state.expanded[node.id] == false

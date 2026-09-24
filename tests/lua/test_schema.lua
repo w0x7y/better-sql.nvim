@@ -8,7 +8,9 @@ schema.set_catalog({ schemas = {{ name = "public", relations = {
     columns = {{ name = "name", type_label = "text" }} },
 }}} })
 local opened
+local open_count = 0
 local buf = schema.show(function(schema_name, relation_name)
+  open_count = open_count + 1
   opened = { schema_name, relation_name }
 end)
 local text = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
@@ -28,6 +30,14 @@ assert(users_line and schema_line)
 vim.api.nvim_win_set_cursor(0, { users_line, 0 })
 vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "xt", false)
 assert(opened and opened[1] == "public" and opened[2] == "users", vim.inspect(opened))
+assert(open_count == 1)
+local after_relation = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
+assert(not after_relation:find("      id  integer", 1, true), "relation columns did not collapse")
+vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "xt", false)
+assert(opened and opened[1] == "public" and opened[2] == "users", vim.inspect(opened))
+assert(open_count == 2)
+assert(table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
+  :find("      id  integer", 1, true), "relation columns did not reopen")
 vim.api.nvim_win_set_cursor(0, { schema_line, 0 })
 vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "xt", false)
 assert(not table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"):find("users", 1, true))
