@@ -93,7 +93,7 @@ def save_edits(conn, store, relation, edits: list[dict]) -> dict:
                     )
                     values = [None if change["is_null"] else change["text"] for change in edit["changes"]]
                     key_values = [
-                        Jsonb(value) if (columns[name]["type_schema"], columns[name]["type_name"]) == ("pg_catalog", "jsonb") else value
+                        Jsonb(value) if (columns[name]["base_type_schema"], columns[name]["base_type_name"]) == ("pg_catalog", "jsonb") else value
                         for name, value in zip(keys, original.key)
                     ]
                     cursor.execute(query, (*values, *key_values, original.xmin))

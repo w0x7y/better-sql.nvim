@@ -56,6 +56,7 @@ class CatalogIntegrationTests(DatabaseTestCase):
         columns = {c["name"]: c for c in self.relation("orders")["columns"]}
         self.assertEqual(columns["Odd Name"], {
             "name": "Odd Name", "type_schema": "pg_catalog", "type_name": "text",
+            "base_type_schema": "pg_catalog", "base_type_name": "text",
             "type_label": "text", "editable": True, "read_only_reason": None,
         })
         self.assertEqual((columns["order_id"]["editable"], columns["order_id"]["read_only_reason"]),

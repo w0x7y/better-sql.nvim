@@ -75,16 +75,28 @@ def load_catalog(conn):
 
         generated_expression = "a.attgenerated <> ''" if conn.info.server_version >= 120000 else "false"
         cursor.execute(f"""
+            WITH RECURSIVE type_bases AS (
+                SELECT oid, oid AS base_oid
+                FROM pg_catalog.pg_type
+                WHERE typbasetype = 0
+                UNION ALL
+                SELECT domain.oid, base.base_oid
+                FROM pg_catalog.pg_type AS domain
+                JOIN type_bases AS base ON base.oid = domain.typbasetype
+            )
             SELECT a.attrelid, a.attname, t.oid, tn.nspname, t.typname,
                    pg_catalog.format_type(a.atttypid, a.atttypmod),
-                   t.typtype, {generated_expression}
+                   t.typtype, {generated_expression}, bn.nspname, bt.typname
             FROM pg_catalog.pg_attribute AS a
             JOIN pg_catalog.pg_type AS t ON t.oid = a.atttypid
             JOIN pg_catalog.pg_namespace AS tn ON tn.oid = t.typnamespace
+            JOIN type_bases AS base ON base.oid = t.oid
+            JOIN pg_catalog.pg_type AS bt ON bt.oid = base.base_oid
+            JOIN pg_catalog.pg_namespace AS bn ON bn.oid = bt.typnamespace
             WHERE a.attrelid = ANY(%s) AND a.attnum > 0 AND NOT a.attisdropped
             ORDER BY a.attrelid, a.attnum
         """, (list(relations_by_oid),))
-        for oid, name, type_oid, type_schema, type_name, type_label, typtype, generated in cursor.fetchall():
+        for oid, name, type_oid, type_schema, type_name, type_label, typtype, generated, base_schema, base_name in cursor.fetchall():
             relation = relations_by_oid[oid]
             editable, reason = column_editability(
                 relation["kind"], relation["primary_key"], name,
@@ -92,6 +104,7 @@ def load_catalog(conn):
             )
             relation["columns"].append({
                 "name": name, "type_schema": type_schema, "type_name": type_name,
+                "base_type_schema": base_schema, "base_type_name": base_name,
                 "type_label": type_label, "editable": editable,
                 "read_only_reason": reason,
             })

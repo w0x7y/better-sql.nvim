@@ -218,3 +218,40 @@ class EditIntegrationTests(DatabaseTestCase):
             self.assertEqual(self.other_conn.execute("SELECT value FROM json_key").fetchone(), ("new",))
         finally:
             self.conn.execute("DROP TABLE json_key")
+
+    def test_jsonb_domain_and_domain_chain_primary_keys(self):
+        self.conn.execute("CREATE DOMAIN json_key_domain AS jsonb CHECK (jsonb_typeof(VALUE) = 'object')")
+        self.conn.execute("CREATE DOMAIN json_key_chain AS json_key_domain")
+        try:
+            for type_name in ("json_key_domain", "json_key_chain"):
+                with self.subTest(type_name=type_name):
+                    self.conn.execute(sql.SQL("CREATE TABLE domain_key (id {} PRIMARY KEY, value text)").format(sql.Identifier(type_name)))
+                    try:
+                        self.conn.execute('INSERT INTO domain_key VALUES (\'{"tenant": 1}\', \'old\')')
+                        relation = next(r for s in load_catalog(self.conn)["schemas"] if s["name"] == self.schema
+                                        for r in s["relations"] if r["name"] == "domain_key")
+                        row = self.store.page(self.conn, relation, 0)["rows"][0]
+                        self.assertEqual(self.store.handles[row["handle"]].key, ({"tenant": 1},))
+                        result = save_edits(self.conn, self.store, relation, [{"handle": row["handle"], "changes": [
+                            {"column": "value", "text": "new", "is_null": False},
+                        ]}])
+                        self.assertEqual(result["rows"][0]["cells"][1]["text"], "new")
+                        self.assertEqual(self.other_conn.execute("SELECT value FROM domain_key").fetchone(), ("new",))
+                        column = relation["columns"][0]
+                        self.assertEqual((column["type_schema"], column["type_name"]), (self.schema, type_name))
+                        self.assertEqual((column["base_type_schema"], column["base_type_name"]), ("pg_catalog", "jsonb"))
+                        # Existing rows survive NOT VALID; casting the old key must still check the domain.
+                        self.conn.execute(sql.SQL("ALTER DOMAIN {} ADD CONSTRAINT reject_old_key CHECK (VALUE <> '{{\"tenant\": 1}}'::jsonb) NOT VALID").format(sql.Identifier(type_name)))
+                        try:
+                            with self.assertRaises(ProtocolError) as raised:
+                                save_edits(self.conn, self.store, relation, [{"handle": row["handle"], "changes": [
+                                    {"column": "value", "text": "must not save", "is_null": False},
+                                ]}])
+                            self.assertEqual(raised.exception.details["sqlstate"], "23514")
+                            self.assertEqual(self.other_conn.execute("SELECT value FROM domain_key").fetchone(), ("new",))
+                        finally:
+                            self.conn.execute(sql.SQL("ALTER DOMAIN {} DROP CONSTRAINT reject_old_key").format(sql.Identifier(type_name)))
+                    finally:
+                        self.conn.execute("DROP TABLE domain_key")
+        finally:
+            self.conn.execute("DROP DOMAIN json_key_domain CASCADE")
