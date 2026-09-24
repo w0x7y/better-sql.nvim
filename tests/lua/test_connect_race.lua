@@ -6,6 +6,7 @@ package.loaded["better_sql.client"] = {
     local client = { stopped = false }
     function client:start(on_exit)
       self.on_exit = on_exit
+      self.process = true
     end
     function client:request(method, params, callback)
       if method == "connect" then
@@ -19,6 +20,7 @@ package.loaded["better_sql.client"] = {
     end
     function client:stop()
       self.stopped = true
+      self.process = nil
     end
     clients[#clients + 1] = client
     return client

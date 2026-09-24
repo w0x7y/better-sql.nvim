@@ -30,7 +30,23 @@ local function connect(name, callback)
   M._connect_generation = (M._connect_generation or 0) + 1
   local generation = M._connect_generation
   local client = Client.new({ python = M.config.python })
+  local completed = false
+  local function finish(err, result)
+    if completed then return end
+    completed = true
+    callback(err, result)
+  end
+  local function connection_error(err)
+    if generation ~= M._connect_generation then
+      return { code = "connect_superseded", message = "connection attempt was superseded" }
+    end
+    if err then return err end
+    if not client.process or client.stopping then
+      return { code = "helper_exited", message = "Helper disconnected during connection setup; run :BetterSqlReconnect" }
+    end
+  end
   client:start(function(_, err, intentional)
+    if not completed then finish(connection_error(err), nil) end
     table_view.disconnect(client)
     if M.client == client then
       M.client = nil
@@ -43,24 +59,20 @@ local function connect(name, callback)
     end
   end)
   client:request("connect", { conninfo = conninfo }, function(err, result)
-    if generation ~= M._connect_generation then
-      client:stop()
-      callback({ code = "connect_superseded", message = "connection attempt was superseded" }, nil)
-      return
-    end
+    if completed then return end
+    err = connection_error(err)
     if err then
       client:stop()
-      callback(err, nil)
+      finish(err, nil)
       return
     end
     local initial_catalog
     local function activate(switch_error)
-      if generation ~= M._connect_generation then
-        switch_error = { code = "connect_superseded", message = "connection attempt was superseded" }
-      end
+      if completed then return end
+      switch_error = connection_error(switch_error)
       if switch_error then
         client:stop()
-        callback(switch_error, nil)
+        finish(switch_error, nil)
         return
       end
       local previous = M.client
@@ -73,10 +85,12 @@ local function connect(name, callback)
         previous:stop()
       end
       schema.set_catalog(initial_catalog)
-      callback(nil, result)
+      finish(nil, result)
     end
     -- A successful callback means the helper is ready for the next request.
     client:request("catalog.load", {}, function(catalog_error, catalog)
+      if completed then return end
+      catalog_error = connection_error(catalog_error)
       initial_catalog = catalog
       if catalog_error then
         activate(catalog_error)

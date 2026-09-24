@@ -72,8 +72,10 @@ function Client:_on_stdout(chunk)
     end
     local callback = self.callbacks[response.id]
     if callback then
-      self.callbacks[response.id] = nil
       vim.schedule(function()
+        -- Keep parsed replies pending until delivery, so exit can fail them.
+        if self.callbacks[response.id] ~= callback then return end
+        self.callbacks[response.id] = nil
         if response.ok then
           callback(nil, response.result)
         else
