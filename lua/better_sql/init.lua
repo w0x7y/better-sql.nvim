@@ -3,6 +3,7 @@ local Client = require("better_sql.client")
 local statement = require("better_sql.statement")
 local results = require("better_sql.results")
 local schema = require("better_sql.schema")
+local table_view = require("better_sql.table")
 
 function M.setup(options)
   options = options or {}
@@ -85,6 +86,28 @@ function M.refresh_schema(callback)
     end
     callback(err, catalog)
   end)
+end
+
+function M.open_relation(schema_name, relation_name, relation)
+  if not M.client then
+    vim.notify("Connect to a PostgreSQL profile first", vim.log.levels.ERROR)
+    return nil
+  end
+  if not relation then
+    local catalog = schema.get_catalog()
+    for _, entry in ipairs(catalog and catalog.schemas or {}) do
+      if entry.name == schema_name then
+        for _, candidate in ipairs(entry.relations or {}) do
+          if candidate.name == relation_name then relation = candidate break end
+        end
+      end
+    end
+  end
+  if not relation then
+    vim.notify("Relation is no longer in the schema cache", vim.log.levels.ERROR)
+    return nil
+  end
+  return table_view.open(M.client, relation, M.active_profile)
 end
 
 local function source_position(sql, start_row, start_col, position)

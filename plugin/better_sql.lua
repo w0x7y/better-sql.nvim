@@ -29,8 +29,8 @@ vim.api.nvim_create_user_command("BetterSqlRunBuffer", function()
 end, {})
 
 vim.api.nvim_create_user_command("BetterSqlSchema", function()
-  require("better_sql.schema").show(function(schema_name, relation_name)
-    vim.notify("Table browser is not available yet: " .. schema_name .. "." .. relation_name, vim.log.levels.INFO)
+  require("better_sql.schema").show(function(schema_name, relation_name, relation)
+    require("better_sql").open_relation(schema_name, relation_name, relation)
   end)
 end, {})
 

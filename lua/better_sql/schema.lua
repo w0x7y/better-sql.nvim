@@ -39,7 +39,8 @@ local function render_tree(state)
           local relation_id = node_id({ "relation", catalog_schema.name, relation.name })
           local relation_open = state.expanded[relation_id] ~= false
           add("  " .. (relation_open and "▾ " or "▸ ") .. relation.name .. " (" .. relation.kind .. ")",
-            { kind = "relation", id = relation_id, schema = catalog_schema.name, name = relation.name })
+            { kind = "relation", id = relation_id, schema = catalog_schema.name,
+              name = relation.name, relation = relation })
           if relation_open then
             for _, column in ipairs(relation.columns or {}) do
               add("      " .. column.name .. "  " .. column.type_label,
@@ -123,7 +124,7 @@ function M.show(on_open_relation)
     if node.kind == "relation" then
       state.expanded[node.id] = state.expanded[node.id] == false
       render_tree(state)
-      state.on_open_relation(node.schema, node.name)
+      state.on_open_relation(node.schema, node.name, node.relation)
     elseif node.kind == "schema" then
       state.expanded[node.id] = state.expanded[node.id] == false
       render_tree(state)
