@@ -21,6 +21,8 @@ function M.connect(name, callback)
     return
   end
 
+  M._connect_generation = (M._connect_generation or 0) + 1
+  local generation = M._connect_generation
   local client = Client.new({ python = M.config.python })
   client:start(function()
     if M.client == client then
@@ -29,6 +31,10 @@ function M.connect(name, callback)
     end
   end)
   client:request("connect", { conninfo = conninfo }, function(err, result)
+    if generation ~= M._connect_generation then
+      client:stop()
+      return
+    end
     if err then
       client:stop()
       callback(err, nil)

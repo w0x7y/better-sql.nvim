@@ -19,7 +19,18 @@ better_sql.connect("local_db", function(err, result)
 end)
 assert(vim.wait(3000, function() return connect_result ~= nil or error_result ~= nil end), "connect timed out")
 assert(error_result == nil, vim.inspect(error_result))
-assert(connect_result.database == "postgres")
+local identity
+better_sql.client:request("query.run", {
+  sql = "select current_database(), current_user",
+  max_rows = 1,
+  max_bytes = 4096,
+}, function(err, result)
+  assert(err == nil, vim.inspect(err))
+  identity = result.sets[1].rows[1]
+end)
+assert(vim.wait(3000, function() return identity ~= nil end), "identity query timed out")
+assert(connect_result.database == identity[1].text)
+assert(connect_result.user == identity[2].text)
 assert(better_sql.active_profile == "local_db")
 assert(not table.concat(argv, " "):find(secret, 1, true), "password leaked to process arguments")
 
@@ -40,7 +51,7 @@ local original_connect = better_sql.connect
 local selected_name
 better_sql.connect = function(name, callback)
   selected_name = name
-  callback(nil, { database = "postgres", user = "idan" })
+  callback(nil, connect_result)
 end
 vim.cmd.BetterSqlConnect()
 assert(selected_name == "local_db")

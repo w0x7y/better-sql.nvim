@@ -51,7 +51,10 @@ class QueryIntegrationTests(DatabaseTestCase):
         self.assertEqual(process.stderr, "")
         replies = [json.loads(line) for line in process.stdout.splitlines()]
         self.assertTrue(replies[0]["ok"])
-        self.assertEqual(replies[0]["result"], {"database": "postgres", "user": "idan"})
+        self.assertEqual(replies[0]["result"], {
+            "database": self.conn.info.dbname,
+            "user": self.conn.info.user,
+        })
         self.assertEqual(replies[1]["error"]["code"], "database_error")
         self.assertEqual(replies[1]["error"]["sqlstate"], "42601")
         self.assertIsNotNone(replies[1]["error"]["position"])
