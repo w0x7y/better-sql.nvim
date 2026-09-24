@@ -5,16 +5,19 @@ import psycopg
 from better_sql.catalog import load_catalog
 from better_sql.protocol import ProtocolError
 from better_sql.query import run_query
+from better_sql.tables import TableStore
 
 
 class Session:
     def __init__(self):
         self.conn = None
+        self.tables = TableStore()
 
     def close(self):
         if self.conn is not None:
             self.conn.close()
             self.conn = None
+        self.tables = TableStore()
 
     def handle(self, method: str, params: dict) -> dict:
         if method == "ping":
@@ -31,6 +34,7 @@ class Session:
                 ) from None
             old = self.conn
             self.conn = conn
+            self.tables = TableStore()
             if old is not None:
                 old.close()
             return {"database": conn.info.dbname, "user": conn.info.user}
@@ -62,5 +66,36 @@ class Session:
                     "database_error", exc.diag.message_primary or "database error",
                     sqlstate=exc.sqlstate,
                     position=int(position) if position else None,
+                ) from None
+        if method == "table.page":
+            if self.conn is None:
+                raise ProtocolError("not_connected", "connect to a database first")
+            schema = params.get("schema")
+            table = params.get("table")
+            if not isinstance(schema, str) or not schema or not isinstance(table, str) or not table:
+                raise ProtocolError("invalid_request", "schema and table must be nonempty strings")
+            offset = params.get("offset", 0)
+            retain_handles = params.get("retain_handles")
+            if type(offset) is not int or offset < 0:
+                raise ProtocolError("invalid_request", "offset must be a nonnegative integer")
+            if retain_handles is not None and (
+                not isinstance(retain_handles, list)
+                or any(not isinstance(handle, str) for handle in retain_handles)
+            ):
+                raise ProtocolError("invalid_request", "retain_handles must be an array of strings")
+            try:
+                catalog = load_catalog(self.conn)
+                relation = next((
+                    relation
+                    for entry in catalog["schemas"] if entry["name"] == schema
+                    for relation in entry["relations"] if relation["name"] == table
+                ), None)
+                if relation is None:
+                    raise ProtocolError("invalid_request", "relation not found")
+                return self.tables.page(self.conn, relation, offset, retain_handles=retain_handles)
+            except psycopg.Error as exc:
+                raise ProtocolError(
+                    "database_error", exc.diag.message_primary or "database error",
+                    sqlstate=exc.sqlstate, position=None,
                 ) from None
         raise ProtocolError("unknown_method", method)
