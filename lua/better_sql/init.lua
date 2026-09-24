@@ -2,6 +2,7 @@ local M = {}
 local Client = require("better_sql.client")
 local statement = require("better_sql.statement")
 local results = require("better_sql.results")
+local schema = require("better_sql.schema")
 
 function M.setup(options)
   options = options or {}
@@ -30,6 +31,8 @@ function M.connect(name, callback)
     if M.client == client then
       M.client = nil
       M.active_profile = nil
+      M._catalog_generation = (M._catalog_generation or 0) + 1
+      schema.set_connection(nil)
     end
   end)
   client:request("connect", { conninfo = conninfo }, function(err, result)
@@ -46,10 +49,41 @@ function M.connect(name, callback)
     local previous = M.client
     M.client = client
     M.active_profile = name
+    schema.set_connection(name)
     if previous then
       previous:stop()
     end
+    local catalog_generation = M._catalog_generation or 0
     callback(nil, result)
+    vim.schedule(function()
+      if M.client == client and (M._catalog_generation or 0) == catalog_generation then
+        M.refresh_schema()
+      end
+    end)
+  end)
+end
+
+function M.refresh_schema(callback)
+  callback = callback or function() end
+  local client = M.client
+  if not client then
+    local err = { code = "not_connected", message = "Connect to a PostgreSQL profile first" }
+    callback(err, nil)
+    return
+  end
+  M._catalog_generation = (M._catalog_generation or 0) + 1
+  local generation = M._catalog_generation
+  schema.set_loading()
+  client:request("catalog.load", {}, function(err, catalog)
+    if M.client ~= client or M._catalog_generation ~= generation then
+      return
+    end
+    if err then
+      schema.set_error(err)
+    else
+      schema.set_catalog(catalog)
+    end
+    callback(err, catalog)
   end)
 end
 

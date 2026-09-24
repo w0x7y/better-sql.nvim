@@ -28,6 +28,20 @@ vim.api.nvim_create_user_command("BetterSqlRunBuffer", function()
   require("better_sql").run_buffer()
 end, {})
 
+vim.api.nvim_create_user_command("BetterSqlSchema", function()
+  require("better_sql.schema").show(function(schema_name, relation_name)
+    vim.notify("Table browser is not available yet: " .. schema_name .. "." .. relation_name, vim.log.levels.INFO)
+  end)
+end, {})
+
+vim.api.nvim_create_user_command("BetterSqlRefreshSchema", function()
+  require("better_sql").refresh_schema(function(err)
+    if err then
+      vim.notify(err.message, vim.log.levels.ERROR)
+    end
+  end)
+end, {})
+
 vim.keymap.set("x", "<leader>sr", function()
   require("better_sql").run_visual()
 end, { desc = "Run selected SQL" })

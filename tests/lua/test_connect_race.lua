@@ -8,9 +8,14 @@ package.loaded["better_sql.client"] = {
       self.on_exit = on_exit
     end
     function client:request(method, params, callback)
-      assert(method == "connect")
-      self.conninfo = params.conninfo
-      self.reply = callback
+      if method == "connect" then
+        self.conninfo = params.conninfo
+        self.reply = callback
+      elseif method == "catalog.load" then
+        callback(nil, { schemas = {} })
+      else
+        error("unexpected method: " .. method)
+      end
     end
     function client:stop()
       self.stopped = true
