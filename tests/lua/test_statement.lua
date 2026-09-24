@@ -41,3 +41,14 @@ assert(statement.state_at({ "select $tag$x;y$tag$" }, 0, 16) == "dollar_quote")
 assert(statement.state_at({ "select -- x;y" }, 0, 13) == "line_comment")
 assert(statement.state_at({ "select /* x;y */" }, 0, 13) == "block_comment")
 assert(statement.state_at({ "select -- x;y", "select 2" }, 1, 0) == "normal")
+
+-- PostgreSQL E strings let a backslash escape the following quote.
+for _, prefix in ipairs({ "E", "e" }) do
+  local line = "select " .. prefix .. "'it\\';still'; select 2;"
+  expect_sql({ line }, 0, 3, "select " .. prefix .. "'it\\';still';")
+  expect_sql({ line }, 0, 25, "select 2;")
+  assert(statement.state_at({ line }, 0, 13) == "single_quote")
+end
+
+-- A backslash has no special meaning in an ordinary single-quoted string.
+expect_sql({ "select 'it\\'; select 2;" }, 0, 3, "select 'it\\';")

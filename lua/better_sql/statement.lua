@@ -38,6 +38,7 @@ local function scan(source, target_offset)
   local state_at
   local block_depth = 0
   local dollar_tag
+  local escape_string = false
   local statement_start = 1
   local index = 1
 
@@ -53,6 +54,9 @@ local function scan(source, target_offset)
 
     if state == "normal" then
       if char == "'" then
+        local prefix = source:sub(index - 1, index - 1)
+        local before_prefix = source:sub(index - 2, index - 2)
+        escape_string = prefix:match("[Ee]") ~= nil and before_prefix:match("[%w_$]") == nil
         state = "single_quote"
       elseif char == '"' then
         state = "double_quote"
@@ -75,11 +79,14 @@ local function scan(source, target_offset)
         statement_start = index + 1
       end
     elseif state == "single_quote" then
-      if char == "'" then
+      if escape_string and char == "\\" and next_char ~= "" then
+        step = 2
+      elseif char == "'" then
         if next_char == "'" then
           step = 2
         else
           state = "normal"
+          escape_string = false
         end
       end
     elseif state == "double_quote" then
