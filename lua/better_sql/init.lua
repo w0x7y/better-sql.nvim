@@ -3,6 +3,7 @@ local Client = require("better_sql.client")
 local statement = require("better_sql.statement")
 local results = require("better_sql.results")
 local schema = require("better_sql.schema")
+local completion = require("better_sql.completion")
 local table_view = require("better_sql.table")
 
 function M.setup(options)
@@ -13,6 +14,7 @@ function M.setup(options)
     max_rows = options.max_rows or 1000,
     max_bytes = options.max_bytes or 4194304,
   }
+  completion.setup()
 end
 
 M.setup()

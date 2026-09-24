@@ -32,8 +32,9 @@ end
 
 -- Scan once from left to right. state_at is the state before the byte at
 -- target_offset; this makes a cursor at the end of a line useful to completion.
-local function scan(source, target_offset)
+local function scan(source, target_offset, collect_normal)
   local spans = {}
+  local normal_positions = collect_normal and {} or nil
   local state = "normal"
   local state_at
   local block_depth = 0
@@ -51,6 +52,7 @@ local function scan(source, target_offset)
     local next_char = source:sub(index + 1, index + 1)
     local step = 1
     local state_before = state
+    if normal_positions then normal_positions[index] = state_before == "normal" end
 
     if state == "normal" then
       if char == "'" then
@@ -132,7 +134,14 @@ local function scan(source, target_offset)
   if statement_start <= #source then
     spans[#spans + 1] = { first = statement_start, last = #source }
   end
-  return spans, state_at
+  return spans, state_at, normal_positions
+end
+
+-- Positions where a SQL token may begin, using the same lexical pass as
+-- statement selection and cursor state. String and comment contents are false.
+function M.normal_positions(source)
+  local _, _, positions = scan(source, nil, true)
+  return positions
 end
 
 -- row and col are zero-based byte offsets. The end position is exclusive.
