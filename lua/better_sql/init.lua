@@ -33,6 +33,7 @@ function M.connect(name, callback)
   client:request("connect", { conninfo = conninfo }, function(err, result)
     if generation ~= M._connect_generation then
       client:stop()
+      callback({ code = "connect_superseded", message = "connection attempt was superseded" }, nil)
       return
     end
     if err then
