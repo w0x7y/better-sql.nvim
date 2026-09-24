@@ -51,7 +51,7 @@ vim.api.nvim_set_current_buf(source)
 vim.cmd.BetterSqlRunBuffer()
 assert(vim.wait(3000, function() return results.current_buffer and vim.api.nvim_buf_is_valid(results.current_buffer) and lines(results.current_buffer):find("Result 1/2", 1, true) end), "buffer query timed out")
 results.select_set(2)
-assert(lines(results.current_buffer):find("2", 1, true))
+assert(lines(results.current_buffer):find("\n2%s*$"), lines(results.current_buffer))
 
 vim.api.nvim_set_current_buf(source)
 vim.api.nvim_buf_set_lines(source, 0, -1, false, { "select 9 as id;", "select 10 as id;" })
@@ -97,5 +97,43 @@ assert(vim.wait(3000, function()
     and vim.api.nvim_buf_is_valid(results.current_buffer) and lines(results.current_buffer):find("Error:", 1, true)
 end), "query error timed out")
 assert(lines(results.current_buffer):find("22012", 1, true))
+
+vim.api.nvim_set_current_buf(source)
+vim.api.nvim_buf_set_lines(source, 0, -1, false, { "select 'é' as x,", " from" })
+local before_error = lines(source)
+better_sql.last_query_error = nil
+vim.cmd.BetterSqlRunBuffer()
+assert(vim.wait(3000, function() return better_sql.last_query_error ~= nil end), "positioned error timed out")
+assert(better_sql.last_query_error.error.position == 19, vim.inspect(better_sql.last_query_error))
+assert(better_sql.last_query_error.row == 1 and better_sql.last_query_error.col == 1, vim.inspect(better_sql.last_query_error))
+assert(vim.api.nvim_get_current_buf() == source)
+assert(vim.deep_equal(vim.api.nvim_win_get_cursor(0), { 2, 1 }))
+assert(lines(source) == before_error, "error navigation changed source SQL")
+
+vim.api.nvim_buf_set_lines(source, 0, -1, false, { "select 1; select 'é' as x, from" })
+vim.api.nvim_win_set_cursor(0, { 1, 15 })
+better_sql.last_query_error = nil
+vim.cmd.BetterSqlRun()
+assert(vim.wait(3000, function() return better_sql.last_query_error ~= nil end), "statement error timed out")
+assert(better_sql.last_query_error.row == 0 and better_sql.last_query_error.col == 28,
+  vim.inspect(better_sql.last_query_error))
+assert(vim.deep_equal(vim.api.nvim_win_get_cursor(0), { 1, 28 }))
+
+vim.api.nvim_buf_set_lines(source, 0, -1, false, { "select 1;", "  select 'é' as x, from" })
+better_sql.last_query_error = nil
+vim.cmd("2BetterSqlRun")
+assert(vim.wait(3000, function() return better_sql.last_query_error ~= nil end), "range error timed out")
+assert(better_sql.last_query_error.row == 1 and better_sql.last_query_error.col == 20,
+  vim.inspect(better_sql.last_query_error))
+assert(vim.deep_equal(vim.api.nvim_win_get_cursor(0), { 2, 20 }))
+
+vim.api.nvim_buf_set_lines(source, 0, -1, false, { "xxx select 'é' as x, from extra" })
+vim.api.nvim_win_set_cursor(0, { 1, 4 })
+better_sql.last_query_error = nil
+vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("v20l\\sr", true, false, true), "xt", false)
+assert(vim.wait(3000, function() return better_sql.last_query_error ~= nil end), "visual error timed out")
+assert(better_sql.last_query_error.row == 0 and better_sql.last_query_error.col == 22,
+  vim.inspect(better_sql.last_query_error))
+assert(vim.deep_equal(vim.api.nvim_win_get_cursor(0), { 1, 22 }))
 
 better_sql.client:stop()

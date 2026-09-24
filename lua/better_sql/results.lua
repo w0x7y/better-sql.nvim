@@ -80,7 +80,12 @@ function M.show(result, profile_name)
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].swapfile = false
   vim.api.nvim_buf_set_name(buf, "better-sql://results/" .. buf)
-  vim.cmd("botright split")
+  local old_window = old and vim.api.nvim_buf_is_valid(old) and vim.fn.bufwinid(old) or -1
+  if old_window ~= -1 then
+    vim.api.nvim_set_current_win(old_window)
+  else
+    vim.cmd("botright split")
+  end
   vim.api.nvim_win_set_buf(0, buf)
   vim.wo.wrap = false
   vim.wo.sidescrolloff = 0

@@ -53,6 +53,21 @@ function M.connect(name, callback)
   end)
 end
 
+local function source_position(sql, start_row, start_col, position)
+  if type(position) ~= "number" or position < 1 or position > vim.fn.strchars(sql) + 1 then
+    return nil, nil
+  end
+  local byte_offset = vim.str_byteindex(sql, position - 1)
+  local prefix = sql:sub(1, byte_offset)
+  local row = start_row
+  for _ in prefix:gmatch("\n") do
+    row = row + 1
+  end
+  local last_newline = prefix:match(".*()\n")
+  local col = last_newline and (#prefix - last_newline) or (start_col + #prefix)
+  return row, col
+end
+
 local function run(sql, source_buf, start_row, start_col)
   if not M.client then
     vim.notify("Connect to a PostgreSQL profile first", vim.log.levels.ERROR)
@@ -63,14 +78,27 @@ local function run(sql, source_buf, start_row, start_col)
     return
   end
   local profile = M.active_profile
+  local source_win = vim.api.nvim_get_current_win()
   M.client:request("query.run", {
     sql = sql,
     max_rows = M.config.max_rows,
     max_bytes = M.config.max_bytes,
   }, function(err, result)
     if err then
-      M.last_query_error = { source_buffer = source_buf, start_row = start_row, start_col = start_col, error = err }
+      local row, col = source_position(sql, start_row, start_col, err.position)
+      M.last_query_error = {
+        source_buffer = source_buf, start_row = start_row, start_col = start_col,
+        row = row, col = col, error = err,
+      }
       results.show_error(err, profile)
+      if row and vim.api.nvim_win_is_valid(source_win)
+        and vim.api.nvim_win_get_buf(source_win) == source_buf then
+        local line = vim.api.nvim_buf_get_lines(source_buf, row, row + 1, false)[1]
+        if line then
+          vim.api.nvim_win_set_cursor(source_win, { row + 1, math.min(col, #line) })
+          vim.api.nvim_set_current_win(source_win)
+        end
+      end
       return
     end
     results.show(result, profile)
