@@ -1,3 +1,6 @@
+import datetime
+import decimal
+import uuid
 import io
 import json
 import unittest
@@ -29,6 +32,15 @@ class QueryTests(unittest.TestCase):
         self.assertEqual(cell(""), {"text": "", "is_null": False})
         self.assertEqual(cell({"é": [1]}), {"text": '{"é": [1]}', "is_null": False})
         self.assertEqual(cell(b"\x00\xff"), {"text": "\\x00ff", "is_null": False})
+
+    def test_nested_typed_array_values_preserve_json_structure(self):
+        value = {"nested": [[decimal.Decimal("12.50"), datetime.date(2024, 1, 2),
+                             uuid.UUID("12345678-1234-1234-1234-123456789abc"), b"\x00"]],
+                 "json": [1, True, None, "é"]}
+        self.assertEqual(json.loads(cell(value)["text"]), {
+            "nested": [["12.50", "2024-01-02", "12345678-1234-1234-1234-123456789abc", "\\x00"]],
+            "json": [1, True, None, "é"],
+        })
 
     def test_command_has_status_and_consumes_no_rows(self):
         result, rows, size = read_result_set(Cursor([], None, "CREATE TABLE"), 5, 1000, cell)

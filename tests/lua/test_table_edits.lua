@@ -219,8 +219,8 @@ local function sql(statement)
 end
 local schema_name = "better_sql_edits_" .. vim.fn.getpid()
 sql("CREATE SCHEMA " .. schema_name)
-sql("CREATE TABLE " .. schema_name .. ".users (tenant text, id int, username text CHECK (username <> 'blocked'), email text, PRIMARY KEY (tenant, id))")
-sql("INSERT INTO " .. schema_name .. ".users VALUES ('a',1,'first','mail'),('b',1,'second','mail')")
+sql("CREATE TABLE " .. schema_name .. ".users (tenant text, id int, username text CHECK (username <> 'blocked'), email text, amount integer, PRIMARY KEY (tenant, id))")
+sql("INSERT INTO " .. schema_name .. ".users VALUES ('a',1,'first','mail',0),('b',1,'second','mail',0)")
 local refreshed_catalog
 better_sql.refresh_schema(function(err) assert(not err); refreshed_catalog = true end)
 assert(vim.wait(3000, function() return refreshed_catalog end))
@@ -237,9 +237,11 @@ local second_handle = grid.current_cell().row_handle
 grid.stage(second_handle, "email", "", true)
 sql("UPDATE " .. schema_name .. ".users SET username='external' WHERE tenant='b'")
 local function save_grid()
-  local done, failure
-  grid.save(function(err) done, failure = true, err end)
-  assert(vim.wait(3000, function() return done end), "save timed out")
+  local calls, failure = 0
+  grid.save(function(err) calls, failure = calls + 1, err end)
+  assert(vim.wait(3000, function() return calls > 0 end), "save timed out")
+  assert(calls == 1, "save callback completed more than once")
+  assert(not vim.bo[buf].modifiable, "save left grid modifiable")
   return failure
 end
 assert(save_grid().code == "edit_conflict")
@@ -257,6 +259,16 @@ assert(actual[2][1].text == "external" and actual[2][2].is_null)
 -- Another save must use the refreshed xmin.
 grid.stage(grid.current_cell().row_handle, "username", "second saved", false)
 assert(not save_grid())
+
+-- A real conversion error includes the invalid value's newline.
+local invalid_handle = grid.current_cell().row_handle
+grid.stage(invalid_handle, "amount", "bad\nvalue", false)
+local conversion_error = save_grid()
+assert(conversion_error and conversion_error.sqlstate == "22P02")
+assert(grid.pending_count() == 1)
+assert(content(buf):find("bad\\nvalue", 1, true))
+grid.discard(invalid_handle, "amount")
+assert(grid.pending_count() == 0)
 
 -- After reconnect, saving is blocked until explicit reload. Composite keys must
 -- not mix the two rows that share id=1; SQL NULL stays distinct from empty text.
@@ -332,7 +344,7 @@ assert(grid.pending_count() == 0)
 actual = sql("SELECT username FROM " .. schema_name .. ".users").sets[1].rows
 assert(actual[1][1].text == "switch save")
 -- Two grids opened before either page returns must both keep usable originals.
-sql("INSERT INTO " .. schema_name .. ".users VALUES ('b',1,'second grid','mail')")
+sql("INSERT INTO " .. schema_name .. ".users VALUES ('b',1,'second grid','mail',0)")
 local relation = { schema = schema_name, name = "users", columns = {}, primary_key = { "tenant", "id" } }
 local left = grid.open(better_sql.client, relation, "other_db")
 local right = grid.open(better_sql.client, relation, "other_db")

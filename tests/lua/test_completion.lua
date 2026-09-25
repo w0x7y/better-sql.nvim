@@ -72,6 +72,31 @@ expect("SELECT u. FROM users u /* (SELECT 1 FROM orders u) */",
 expect("SELECT u. FROM users u WHERE 'text' = '(SELECT 1 FROM orders u)'",
   { "email", "id", "username" }, #"SELECT u.")
 
+-- Each set-operation operand owns its aliases, including nested operands.
+for _, operator in ipairs({ "UNION", "UNION ALL", "INTERSECT", "EXCEPT" }) do
+  local sql = "SELECT u. FROM users u " .. operator .. " SELECT u. FROM orders u"
+  expect(sql, { "email", "id", "username" }, #"SELECT u.")
+  expect(sql, { "order_id" }, sql:find(" SELECT u.", 1, true) + #" SELECT u." - 1)
+  local nested = "SELECT 1 FROM users outer_user WHERE EXISTS (" .. sql .. ")"
+  local first = nested:find("SELECT u.", 1, true)
+  local second = nested:find("SELECT u.", first + 1, true)
+  expect(nested, { "email", "id", "username" }, first - 1 + #"SELECT u.")
+  expect(nested, { "order_id" }, second - 1 + #"SELECT u.")
+  local correlated = "SELECT 1 FROM users u WHERE EXISTS (SELECT 1 FROM orders o " .. operator .. " SELECT u.)"
+  expect(correlated, { "email", "id", "username" }, #correlated - 1)
+end
+expect('SELECT u. FROM users u /* UNION SELECT u. FROM orders u */',
+  { "email", "id", "username" }, #"SELECT u.")
+expect('SELECT "union". FROM users "union" UNION SELECT "union". FROM orders "union"',
+  { "email", "id", "username" }, #'SELECT "union".')
+expect([[SELECT u. FROM users u WHERE username = 'UNION SELECT u. FROM orders u']],
+  { "email", "id", "username" }, #"SELECT u.")
+local reserved_catalog = { schemas = { { name = "public", relations = {
+  { name = "order", columns = { { name = "select" }, { name = "normal" } } },
+} } } }
+assert(vim.deep_equal(completion.suggest("SELECT * FROM ord", #"SELECT * FROM ord", reserved_catalog), { '"order"' }))
+assert(vim.deep_equal(completion.suggest('SELECT "order".', #'SELECT "order".', reserved_catalog), { '"select"', "normal" }))
+
 schema.set_catalog(catalog)
 better_sql.setup()
 vim.opt.virtualedit = "onemore"

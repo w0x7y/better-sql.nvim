@@ -99,6 +99,15 @@ end), "query error timed out")
 assert(lines(results.current_buffer):find("22012", 1, true))
 
 vim.api.nvim_set_current_buf(source)
+vim.api.nvim_buf_set_lines(source, 0, -1, false, { [[SELECT E'bad\nvalue'::int]] })
+better_sql.last_query_error = nil
+vim.cmd.BetterSqlRunBuffer()
+assert(vim.wait(3000, function()
+  return better_sql.last_query_error and lines(results.current_buffer):find("bad\\nvalue", 1, true)
+end), "multiline PostgreSQL error was not rendered")
+assert(lines(results.current_buffer):find("22P02", 1, true))
+assert(not vim.bo[results.current_buffer].modifiable)
+vim.api.nvim_set_current_buf(source)
 vim.api.nvim_buf_set_lines(source, 0, -1, false, { "select 'é' as x,", " from" })
 local before_error = lines(source)
 better_sql.last_query_error = nil

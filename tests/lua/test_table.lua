@@ -115,9 +115,10 @@ vim.cmd.BetterSqlSchema()
 local tree = vim.api.nvim_get_current_buf()
 local function open_relation(name)
   local lines = vim.api.nvim_buf_get_lines(tree, 0, -1, false)
-  local line_number
+  local line_number, in_schema
   for index, line in ipairs(lines) do
-    if line:find(name .. " (", 1, true) then line_number = index end
+    if line:sub(1, 1) ~= " " then in_schema = line:find(schema_name, 1, true) ~= nil end
+    if in_schema and line:find(name .. " (", 1, true) then line_number = index end
   end
   assert(line_number, "relation missing from schema tree: " .. name)
   vim.api.nvim_set_current_win(vim.fn.bufwinid(tree))

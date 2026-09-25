@@ -1,4 +1,5 @@
 local M = {}
+local display = require("better_sql.display")
 local table_pages = require("better_sql.table_pages")
 
 local PAGE_SIZE = 100
@@ -7,9 +8,7 @@ local DATA_START = 6
 local views = {}
 
 local function cell_text(cell)
-  if cell.is_null then return "NULL" end
-  if cell.text == "" then return '""' end
-  return tostring(cell.text):gsub("\\", "\\\\"):gsub("\r", "\\r"):gsub("\n", "\\n"):gsub("\t", "\\t")
+  return display.cell(cell.text, cell.is_null)
 end
 
 local function take_width(value, width)
@@ -78,16 +77,14 @@ local function set_line(state, line_number, text)
   if not vim.api.nvim_buf_is_valid(state.buf) then return end
   local existing = vim.api.nvim_buf_get_lines(state.buf, line_number - 1, line_number, false)[1]
   if existing == text then return end
-  vim.bo[state.buf].modifiable = true
-  vim.api.nvim_buf_set_lines(state.buf, line_number - 1, line_number, false, { text })
-  vim.bo[state.buf].modifiable = false
+  display.set_lines(state.buf, line_number - 1, line_number, { text })
 end
 
 local function update_detail(state)
   local selection = selected_cell(state)
   local detail = "Cell: no row selected"
   if selection then
-    detail = "Cell: " .. selection.column_name .. " = " .. cell_text(selection.cell)
+    detail = "Cell: " .. display.line(selection.column_name) .. " = " .. cell_text(selection.cell)
   end
   set_line(state, 3, detail)
 end
@@ -147,9 +144,8 @@ local function show_detail(state)
   local buf = vim.api.nvim_create_buf(false, true)
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].bufhidden = "wipe"
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false,
-    { selection.column_name .. ": " .. cell_text(selection.cell) })
-  vim.bo[buf].modifiable = false
+  display.set_lines(buf, 0, -1,
+    { display.line(selection.column_name) .. ": " .. cell_text(selection.cell) })
   local width = math.max(1, math.min(80, vim.api.nvim_win_get_width(parent) - 2))
   local height = math.max(1, math.min(8, vim.api.nvim_win_get_height(parent) - 2))
   local win = vim.api.nvim_open_win(buf, true, {
@@ -168,17 +164,17 @@ local function write_page(state)
   local lines = {}
   local relation = state.relation
   local name = relation and (relation.schema .. "." .. relation.name) or "Preview"
-  lines[1] = "Profile: " .. (state.profile or "PostgreSQL") .. "  Relation: " .. name
+  lines[1] = "Profile: " .. display.line(state.profile or "PostgreSQL") .. "  Relation: " .. display.line(name)
   if state.loading then
     lines[2] = "Loading rows..."
   elseif state.error then
-    lines[2] = "Error: " .. state.error
+    lines[2] = "Error: " .. display.line(state.error)
   else
     local first = #page.rows > 0 and page.offset + 1 or 0
     local last = page.offset + #page.rows
     lines[2] = string.format("Rows %d-%d%s", first, last, page.has_more and "  More available" or "")
     if not page.editable then
-      lines[2] = lines[2] .. "  Read-only: " .. (page.read_only_reason or "Relation is read-only")
+      lines[2] = lines[2] .. "  Read-only: " .. display.line(page.read_only_reason or "Relation is read-only")
     end
   end
   lines[2] = lines[2] .. "  Pending: " .. pending_count(state)
@@ -188,7 +184,7 @@ local function write_page(state)
 
   local widths = {}
   for col, column in ipairs(page.columns or {}) do
-    widths[col] = math.min(CELL_WIDTH, math.max(4, vim.fn.strdisplaywidth(column.name)))
+    widths[col] = math.min(CELL_WIDTH, math.max(4, vim.fn.strdisplaywidth(display.line(column.name))))
     for _, row in ipairs(page.rows or {}) do
       widths[col] = math.min(CELL_WIDTH, math.max(widths[col], 1 + vim.fn.strdisplaywidth(cell_text(displayed_cell(state, row, col)))))
     end
@@ -207,7 +203,7 @@ local function write_page(state)
     return table.concat(fields, " | "), spans
   end
   local headers = {}
-  for _, column in ipairs(page.columns or {}) do headers[#headers + 1] = column.name end
+  for _, column in ipairs(page.columns or {}) do headers[#headers + 1] = display.line(column.name) end
   state.header = make_line(headers)
   lines[4] = state.header
   lines[5] = string.rep("-", math.max(1, #state.header))
@@ -223,9 +219,7 @@ local function write_page(state)
     state.positions[DATA_START + index - 1] = spans
   end
   if #page.rows == 0 then lines[DATA_START] = "(no rows)" end
-  vim.bo[state.buf].modifiable = true
-  vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)
-  vim.bo[state.buf].modifiable = false
+  display.set_lines(state.buf, 0, -1, lines)
   update_winbars(state)
   if #page.rows > 0 and #page.columns > 0 then
     move_to_cell(state, state.selected_row, state.selected_col)
@@ -366,7 +360,7 @@ local function edit_cell(state, null)
   if reason then vim.notify("Read-only: " .. reason, vim.log.levels.WARN); return end
   if null then stage(state, selection.row_handle, selection.column_name, "", true); return end
   local generation = state.generation
-  vim.ui.input({ prompt = selection.column_name .. ": ", default = selection.cell.text }, function(text)
+  vim.ui.input({ prompt = display.line(selection.column_name) .. ": ", default = selection.cell.text }, function(text)
     if text ~= nil and views[state.buf] == state and state.generation == generation then
       stage(state, selection.row_handle, selection.column_name, text, false)
     end
@@ -375,11 +369,15 @@ end
 
 local function save(state, callback)
   callback = callback or function() end
+  local function finish(err, result)
+    local ok, render_error = pcall(write_page, state)
+    if not ok and not err then err = { code = "render_error", message = tostring(render_error) } end
+    callback(err, result)
+  end
   local function failure(code, message)
     local err = { code = code, message = message }
     state.error = message
-    write_page(state)
-    callback(err)
+    finish(err)
   end
   if state.loading or state.saving then failure("busy", "Wait for the current table operation"); return end
   if not state.client or state.needs_reload or next(state.stale) then
@@ -404,7 +402,12 @@ local function save(state, callback)
     edits[#edits + 1] = { handle = handle, changes = changes }
   end
   state.saving, state.error = true, nil
-  write_page(state)
+  local ok, render_error = pcall(write_page, state)
+  if not ok then
+    state.saving = false
+    callback({ code = "render_error", message = tostring(render_error) })
+    return
+  end
   local client, generation = state.client, state.generation
   client:request("table.save", { schema = state.relation.schema, table = state.relation.name, edits = edits }, function(err, result)
     if views[state.buf] ~= state or state.client ~= client or state.generation ~= generation then
@@ -443,8 +446,7 @@ local function save(state, callback)
       end
       state.error = nil
     end
-    write_page(state)
-    callback(err, result)
+    finish(err, result)
   end)
 end
 

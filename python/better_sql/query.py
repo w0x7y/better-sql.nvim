@@ -7,7 +7,7 @@ def cell(value):
     if value is None:
         return {"text": "", "is_null": True}
     if isinstance(value, (dict, list)):
-        return {"text": json.dumps(value, ensure_ascii=False), "is_null": False}
+        return {"text": json.dumps(value, ensure_ascii=False, default=lambda item: cell(item)["text"]), "is_null": False}
     if isinstance(value, bytes):
         return {"text": "\\x" + value.hex(), "is_null": False}
     return {"text": str(value), "is_null": False}

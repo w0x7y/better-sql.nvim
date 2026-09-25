@@ -73,6 +73,12 @@ local function query_scopes(items)
       token.scope = current
       current = stack[#stack] or 0
       stack[#stack] = nil
+    elseif keyword(token, "union") or keyword(token, "intersect") or keyword(token, "except") then
+      -- Operands are siblings: they inherit outer aliases, never each other's.
+      next_scope = next_scope + 1
+      parents[next_scope] = parents[current]
+      current = next_scope
+      token.scope = current
     else
       token.scope = current
     end
@@ -101,7 +107,7 @@ local function aliases(items, scope, parents, qualifier)
         if keyword(alias, "as") then alias = items[last + 2] end
         if is_name(alias) and not alias.quoted and not vim.tbl_contains({
           "on", "using", "where", "join", "left", "right", "full", "inner", "cross", "natural",
-          "group", "order", "limit", "offset", "having", "union", "returning",
+          "group", "order", "limit", "offset", "having", "union", "intersect", "except", "returning",
         }, alias.value) then
           scoped[token.scope] = scoped[token.scope] or {}
           scoped[token.scope][alias.value] = relation
@@ -134,8 +140,20 @@ local function find_relation(catalog, schema_name, relation_name)
   return fallback
 end
 
+-- PostgreSQL reserved keywords cannot be inserted as bare identifiers.
+local reserved = {}
+for word in ([[
+  all analyse analyze and any array as asc asymmetric both case cast check collate
+  column constraint create current_catalog current_date current_role current_time
+  current_timestamp current_user default deferrable desc distinct do else end except
+  false fetch for foreign from grant group having in initially intersect into lateral
+  leading limit localtime localtimestamp not null offset on only or order placing
+  primary references returning select session_user some symmetric system_user table
+  then to trailing true union unique user using variadic when where window with
+]]):gmatch("%S+") do reserved[word] = true end
+
 local function display_name(name)
-  if name:match("^[a-z_][a-z_0-9$]*$") then return name end
+  if name:match("^[a-z_][a-z_0-9$]*$") and not reserved[name] then return name end
   return '"' .. name:gsub('"', '""') .. '"'
 end
 

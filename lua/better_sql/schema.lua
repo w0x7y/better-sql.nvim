@@ -1,4 +1,5 @@
 local M = {}
+local display = require("better_sql.display")
 
 local catalog_cache
 local connection
@@ -17,7 +18,7 @@ local function render_tree(state)
   local lines = {}
   local line_nodes = {}
   local function add(line, node)
-    lines[#lines + 1] = line
+    lines[#lines + 1] = display.line(line)
     line_nodes[#lines] = node
   end
 
@@ -52,9 +53,7 @@ local function render_tree(state)
     end
   end
   state.line_nodes = line_nodes
-  vim.bo[state.buf].modifiable = true
-  vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, lines)
-  vim.bo[state.buf].modifiable = false
+  display.set_lines(state.buf, 0, -1, lines)
 end
 
 local function render_views()

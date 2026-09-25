@@ -1,20 +1,11 @@
 local M = {}
+local display = require("better_sql.display")
 
 local state
 
-local function display(text, is_null)
-  if is_null then
-    return "NULL"
-  end
-  if text == "" then
-    return '""'
-  end
-  return tostring(text):gsub("\\", "\\\\"):gsub("\r", "\\r"):gsub("\n", "\\n"):gsub("\t", "\\t")
-end
-
 local function render(set, index, count, profile)
-  local lines = { string.format("%s  Result %d/%d", profile or "PostgreSQL", index, count) }
-  lines[#lines + 1] = "Status: " .. (set.status or "")
+  local lines = { string.format("%s  Result %d/%d", display.line(profile or "PostgreSQL"), index, count) }
+  lines[#lines + 1] = "Status: " .. display.line(set.status or "")
   if set.truncated then
     lines[#lines + 1] = "Output truncated by the configured row or byte limit"
   end
@@ -24,12 +15,12 @@ local function render(set, index, count, profile)
     local widths = {}
     local rows = {}
     for col, column in ipairs(columns) do
-      widths[col] = vim.fn.strdisplaywidth(column.name)
+      widths[col] = vim.fn.strdisplaywidth(display.line(column.name))
     end
     for _, row in ipairs(set.rows or {}) do
       local cells = {}
       for col, cell in ipairs(row) do
-        cells[col] = display(cell.text, cell.is_null)
+        cells[col] = display.cell(cell.text, cell.is_null)
         widths[col] = math.max(widths[col], vim.fn.strdisplaywidth(cells[col]))
       end
       rows[#rows + 1] = cells
@@ -43,7 +34,7 @@ local function render(set, index, count, profile)
     end
     local headers = {}
     for _, column in ipairs(columns) do
-      headers[#headers + 1] = column.name
+      headers[#headers + 1] = display.line(column.name)
     end
     lines[#lines + 1] = ""
     lines[#lines + 1] = formatted(headers)
@@ -63,9 +54,7 @@ function M.select_set(index)
   if not vim.api.nvim_buf_is_valid(buf) then
     return
   end
-  vim.bo[buf].modifiable = true
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, render(state.sets[index], index, #state.sets, state.profile))
-  vim.bo[buf].modifiable = false
+  display.set_lines(buf, 0, -1, render(state.sets[index], index, #state.sets, state.profile))
 end
 
 function M.show(result, profile_name)

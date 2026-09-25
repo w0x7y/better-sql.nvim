@@ -165,7 +165,6 @@ PYTHONPATH=python python3 -m unittest discover -s tests/integration -v
 for test_file in tests/lua/test_*.lua; do
   nvim --headless -u NONE -l "$test_file"
 done
-nvim --headless -u NONE -l tests/lua/test_e2e.lua
 git diff --check
 ```
 

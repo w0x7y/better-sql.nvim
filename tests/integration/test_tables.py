@@ -29,6 +29,23 @@ class TableIntegrationTests(DatabaseTestCase):
         schema = next(s for s in load_catalog(self.conn)["schemas"] if s["name"] == self.schema)
         self.relations = {relation["name"]: relation for relation in schema["relations"]}
 
+    def test_session_pages_typed_arrays_as_read_only_cells(self):
+        self.conn.execute("CREATE TABLE arrays (id integer PRIMARY KEY, amounts numeric[], dates date[], ids uuid[])")
+        self.conn.execute("""INSERT INTO arrays VALUES (1, ARRAY[12.50, NULL]::numeric[],
+            ARRAY[DATE '2024-01-02'], ARRAY['12345678-1234-1234-1234-123456789abc'::uuid])""")
+        session = Session()
+        try:
+            session.handle("connect", {"conninfo": self.conn.info.dsn})
+            page = session.handle("table.page", {"schema": self.schema, "table": "arrays", "offset": 0})
+            self.assertEqual([json.loads(value["text"]) for value in page["rows"][0]["cells"][1:]], [
+                ["12.50", None], ["2024-01-02"], ["12345678-1234-1234-1234-123456789abc"],
+            ])
+            for column in page["columns"][1:]:
+                self.assertFalse(column["editable"])
+                self.assertEqual(column["read_only_reason"], "unsupported_type")
+        finally:
+            session.close()
+
     def test_page_size_has_more_and_order(self):
         relation = self.relations["numbered"]
         first = self.store.page(self.conn, relation, 0)

@@ -17,6 +17,19 @@ class QueryIntegrationTests(DatabaseTestCase):
             {"text": "", "is_null": False},
         ])
 
+    def test_typed_arrays_are_displayable(self):
+        result = run_query(self.conn, """
+            SELECT ARRAY[[12.50::numeric, NULL], [1.25::numeric, 2]],
+                   ARRAY[DATE '2024-01-02', NULL],
+                   ARRAY['12345678-1234-1234-1234-123456789abc'::uuid],
+                   '{"a": [1, true, null]}'::jsonb
+        """)
+        cells = result["sets"][0]["rows"][0]
+        self.assertEqual([json.loads(value["text"]) for value in cells], [
+            [["12.50", None], ["1.25", "2"]], ["2024-01-02", None],
+            ["12345678-1234-1234-1234-123456789abc"], {"a": [1, True, None]},
+        ])
+
     def test_ddl_status(self):
         result = run_query(self.conn, "create temporary table better_sql_query_test (id int)")
         self.assertEqual(result["sets"][0]["status"], "CREATE TABLE")
