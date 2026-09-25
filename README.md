@@ -1,157 +1,171 @@
 # better-sql.nvim
 
-Run PostgreSQL queries, browse schemas, complete database names, and edit existing table rows from Neovim. Query results are read-only. The table browser stages cell changes and saves them in one transaction.
+Browse PostgreSQL schemas, run SQL, complete table and column names, and edit existing table cells in Neovim. Query results are read-only. Table edits stay staged until you save them together.
 
-## Installation
+## Quick start
 
-Requirements:
+1. Install Neovim 0.10 or newer and Python 3.10 or newer. Make sure Neovim can reach your PostgreSQL database. Create a Python environment for the plugin:
 
-- Neovim 0.10 or newer.
-- Python 3.10 or newer.
-- Psycopg 3.3 or newer, below version 4.
-- A PostgreSQL database reachable from the machine running Neovim.
+   ```sh
+   python3 -m venv ~/.local/share/better-sql-venv
+   ~/.local/share/better-sql-venv/bin/python -m pip install "psycopg[binary]>=3.3,<4"
+   ```
 
-Install this repository with your Neovim plugin manager, or place the checkout in `~/.local/share/nvim/site/pack/plugins/start/better-sql.nvim`. No other Neovim plugin is required. The built-in menus handle profile selection, cell input, and completion.
+2. If your Lazy setup imports `lua/plugins`, create `~/.config/nvim/lua/plugins/better_sql.lua` with this content. Otherwise, add the inner plugin spec to your Lazy plugin list:
 
-Install Psycopg into the Python environment you will configure:
+   ```lua
+   return {
+     {
+       "w0x7y/better-sql.nvim",
+       main = "better_sql",
+       lazy = false,
+       opts = {
+         python = vim.fn.expand("~/.local/share/better-sql-venv/bin/python"),
+         connections = {
+           dev = "service=devdb",
+         },
+       },
+     },
+   }
+   ```
 
-```sh
-python3 -m venv ~/.local/share/better-sql-venv
-~/.local/share/better-sql-venv/bin/python -m pip install "psycopg[binary]>=3.3,<4"
-```
+   This repository is private. Make sure Git can access it before Lazy installs it; if you use GitHub CLI, run [`gh auth setup-git`](https://cli.github.com/manual/gh_auth_setup-git).
 
-The binary extra supplies the PostgreSQL client library. You do not need `psql` to use the plugin. From a repository checkout, `python -m pip install -r requirements.txt` installs the same runtime dependency.
+3. Define `devdb` in `~/.pg_service.conf`. If the server needs a password, add it to `~/.pgpass`. See [Connections and credentials](#connections-and-credentials).
+4. Open a `.sql` file, run `:BetterSqlConnect`, and select `dev`. Type `SELECT current_database();`, put the cursor on that statement, and run `:BetterSqlRun`. Results open below your SQL window.
+5. Run `:BetterSqlSchema` to browse the database. Select a table or view and press `<CR>` to open its rows.
 
-Add this to your Neovim configuration after the plugin is on `runtimepath`:
-
-```lua
-require("better_sql").setup({
-  python = vim.fn.expand("~/.local/share/better-sql-venv/bin/python"),
-  connections = {
-    localdb = "service=localdb",
-    reporting = "host=localhost port=5432 dbname=reporting user=reader",
-  },
-  max_rows = 1000,
-  max_bytes = 4194304,
-})
-```
-
-`python` defaults to `python3`. If that interpreter already has Psycopg, you can use `python = vim.fn.exepath("python3")`. A missing dependency error usually means Psycopg was installed into a different interpreter.
+`psql` and a completion plugin are not required. If your chosen Python already has Psycopg 3.3 or newer, set `python` to that interpreter. You can also install the repository as a normal Neovim package instead of using `lazy.nvim`.
 
 ## Connections and credentials
 
-The keys in `connections` are profile names displayed by `:BetterSqlConnect`. Each value is a nonempty libpq connection string or PostgreSQL URI. One profile is active at a time. SQL windows show its name in the winbar; results, schema trees, and table grids also show the profile.
-
-Libpq resolves `service=localdb` through its service configuration. For example, put this in `~/.pg_service.conf`:
+`connections` maps the names shown by `:BetterSqlConnect` to libpq connection strings or PostgreSQL URIs. Keep passwords out of your Neovim configuration. For the quick-start profile, a service file can hold the connection settings:
 
 ```ini
-[localdb]
+# ~/.pg_service.conf
+[devdb]
 host=localhost
 port=5432
-dbname=my_database
-user=my_user
+dbname=appdb
+user=appuser
 ```
 
-Use a libpq password file to keep credentials out of your Neovim configuration. On Unix, `~/.pgpass` contains lines in this format:
+If the server needs a password, add a matching entry to `~/.pgpass`:
 
 ```text
-hostname:port:database:username:password
+localhost:5432:appdb:appuser:your-password
 ```
 
-Set its permissions with `chmod 600 ~/.pgpass`. Libpq also accepts `PGPASSFILE` for a custom password file and `PGSERVICEFILE` for a custom service file. Other standard libpq environment variables, such as `PGHOST`, `PGPORT`, `PGDATABASE`, and `PGUSER`, supply omitted connection settings. Neovim's Python helper inherits its environment.
+Run `chmod 600 ~/.pgpass` on Unix. Libpq also supports `PGSERVICEFILE` and `PGPASSFILE` for custom file locations, plus standard variables such as `PGHOST`, `PGPORT`, `PGDATABASE`, and `PGUSER`. The Python helper inherits Neovim's environment.
 
-The plugin does not save passwords or log connection strings. When you switch profiles with pending table edits, choose **Save**, **Discard**, or **Stay**. A failed save leaves the current profile and edits in place.
+A profile can also use a connection string directly, for example `"host=localhost port=5432 dbname=appdb user=appuser"`. The plugin does not save passwords or log connection strings. One profile is active at a time; its name appears in SQL winbars, results, schema trees, and table grids. When you switch profiles with staged edits, choose **Save**, **Discard**, or **Stay**. A failed save leaves the current profile and edits in place.
 
-## Commands
+If `:BetterSqlConnect` reports a missing Python dependency, install Psycopg into the exact interpreter set by `python`. The default is `python3`.
+
+### Supabase
+
+In your Supabase project, open **Connect** and choose **Session pooler**. Copy the host and username from the connection string shown there. Replace the `dev` entry in the quick-start `connections` table with a profile like this:
+
+```lua
+supabase = "host=YOUR_POOLER_HOST port=5432 dbname=postgres user=postgres.YOUR_PROJECT_REF sslmode=require",
+```
+
+The matching `~/.pgpass` entry is:
+
+```text
+YOUR_POOLER_HOST:5432:postgres:postgres.YOUR_PROJECT_REF:YOUR_DATABASE_PASSWORD
+```
+
+Use the exact host, port, database, and username from your project's [Connect dialog](https://supabase.com/docs/guides/database/connecting-to-postgres). The shared pooler username includes the project ref. Keep the database password out of your Lua configuration, and run `chmod 600 ~/.pgpass` after saving the password file.
+
+## Browse schemas and rows
+
+Run `:BetterSqlSchema` after connecting. The tree opens in a right-side split, half the terminal width, with long lines wrapped. Press `<CR>` on a schema to expand or collapse it. Press `<CR>` on a table or view to open its grid and toggle its column list. The tree includes non-system schemas, ordinary and partitioned tables, views, column names, and column types.
+
+The schema cache loads when you connect. Run `:BetterSqlRefreshSchema` after `CREATE`, `ALTER`, or `DROP`, including changes made outside Neovim. Running DDL does not refresh the cache automatically. Completion uses the same cache.
+
+Table grids load up to 100 rows per page. Use `]p` and `[p` to move between pages. Tables with a primary key are ordered by that key. Views and tables without a primary key have no guaranteed paging order. The grid shows the selected cell's value near the top and keeps column headers in the winbar as you scroll sideways. Grid cells are clipped to 24 display columns; press `K` for the full value, then `q` to close its detail window.
+
+## Run SQL and read results
+
+Put the cursor inside a statement and run `:BetterSqlRun`. The statement finder handles semicolons inside strings, quoted identifiers, dollar quotes, line comments, and nested block comments. Use `:BetterSqlRunBuffer` for the whole buffer. In Visual mode, select text and press `<leader>sr` to run exactly that selection, including a characterwise selection. `:BetterSqlRun` with an Ex range, including Vim's `'<,'>` Visual range, runs complete selected lines.
+
+Queries run exactly as entered. The plugin does not add `LIMIT` or prevent writes. The results window opens below the SQL window and shows command status, column headers, and rows. For a request with several result sets, press `]r` or `[r` to move between them. `NULL` appears as `NULL`; an empty string appears as `""`. Newlines and tabs are escaped for display.
+
+Database errors appear in the results window with their SQL state. When PostgreSQL supplies an error position, the cursor moves to that position in the source SQL window. Use `:BetterSqlCancel` to request cancellation of a running query.
+
+## Complete names while writing SQL
+
+In a buffer with `filetype=sql`, type `.` to open Neovim's built-in completion menu when matches are available. Press `<C-x><C-o>` for a partial name. Completion suggests schemas and relations after `FROM` or `JOIN`, relations after `schema.`, and columns after `table.` or a recognized alias:
+
+```sql
+SELECT u.
+FROM public.users AS u;
+```
+
+Completion reads the schema cache. If a new table or column is missing, run `:BetterSqlRefreshSchema` and try again. It does not offer names in every SQL context.
+
+## Edit and save table cells
+
+Open a table from the schema tree. Use `h` and `l` to change cells, or `j` and `k` to change rows while keeping the selected column. Press `e` to enter a replacement value. Enter PostgreSQL text input without SQL string quotes, such as `true`, `2026-09-24`, or `{"enabled":true}`. An empty input means an empty string. Press `N` to stage SQL `NULL`; typing `NULL` in the prompt passes the text `NULL` to the column's input conversion.
+
+An edited cell shows `*`, and the grid shows the pending cell count. Edits remain staged while you change pages. Press `u` on a cell to discard its pending edit, or `s` to save all pending edits in that grid, including edits on other pages. The save uses bound values and one database transaction. If any value conversion, constraint, permission, or concurrent edit fails, the whole save rolls back and staged values remain visible. Press `r` to reload rows and review staged text against fresh row versions before retrying. If a row no longer matches, discard its staged cells with `u`.
+
+The grid can update existing, non-key cells in ordinary or partitioned tables with a primary key. Views, tables without a primary key, primary-key columns, and generated columns are read-only. The grid shows a reason when editing is blocked. Supported editable types are text, varchar, char, integers, floating-point types, numeric, boolean, uuid, date, time, timetz, timestamp, timestamptz, enum, json, and jsonb. Arrays, binary data, domains, intervals, and other custom or complex types are read-only. Use SQL to insert or delete rows.
+
+Finish an explicit SQL transaction with `COMMIT` or `ROLLBACK` before saving table edits. Staged edits live only in the grid buffer. Closing the grid wipes them, and restarting Neovim does not restore them.
+
+## Command and key reference
 
 | Command | Action |
 | --- | --- |
 | `:BetterSqlConnect` | Select a configured profile and load its schema cache. |
-| `:BetterSqlRun` | Run the SQL statement under the cursor. An Ex range runs those complete lines. |
-| `:BetterSqlRunBuffer` | Run the entire current buffer. |
 | `:BetterSqlSchema` | Open the cached schema tree. |
-| `:BetterSqlRefreshSchema` | Reload the schema cache from PostgreSQL. |
+| `:BetterSqlRefreshSchema` | Reload the schema cache. |
+| `:BetterSqlRun` | Run the statement under the cursor, or the complete lines in an Ex range. |
+| `:BetterSqlRunBuffer` | Run the entire buffer. |
 | `:BetterSqlCancel` | Request cancellation of the running query. |
-| `:BetterSqlReconnect` | Restart the connection using the last selected profile. |
-
-In Visual mode, `<leader>sr` runs the selected text, including characterwise selections. Typing `:BetterSqlRun` from Visual mode uses Vim's `'<,'>` line range, so it runs the complete selected lines. Statement detection understands quoted identifiers, strings, dollar quotes, line comments, nested block comments, and semicolons within them.
-
-Queries run exactly as entered. Results show command status, column headers, and rows. `NULL` is displayed as `NULL`; an empty string is displayed as `""`. Newlines and tabs are escaped for display. Database errors include the SQL state, and the cursor moves to the server's error position when available.
-
-## Keys
+| `:BetterSqlReconnect` | Restart the last selected profile's connection. |
 
 | View | Key | Action |
 | --- | --- | --- |
-| SQL, Visual mode | `<leader>sr` | Run selected SQL. |
-| SQL, Insert mode | `<C-x><C-o>` | Open built-in omnifunc completion. |
-| Results | `]r` / `[r` | Next / previous result set. |
-| Schema tree | `<CR>` on a schema | Expand or collapse it. |
-| Schema tree | `<CR>` on a table or view | Open its grid and toggle its column list. |
-| Table grid | `h` / `l` | Previous / next cell. |
-| Table grid | `j` / `k` | Next / previous row, keeping the selected column. |
-| Table grid | `]p` / `[p` | Next / previous page. |
-| Table grid | `K` | Open the full cell value in a detail window. |
+| SQL, Visual mode | `<leader>sr` | Run the selected text. |
+| SQL, Insert mode | `<C-x><C-o>` | Complete a partial name. |
+| Results | `]r`, `[r` | Next, previous result set. |
+| Schema tree | `<CR>` | Toggle a schema, or open a relation and toggle its columns. |
+| Table grid | `h`, `l` | Previous, next cell. |
+| Table grid | `j`, `k` | Next, previous row. |
+| Table grid | `]p`, `[p` | Next, previous page. |
+| Table grid | `K` | Show the full cell value. |
 | Cell detail | `q` | Close the detail window. |
-| Table grid | `e` | Edit the selected cell with a text prompt. |
-| Table grid | `N` | Stage SQL `NULL` for the selected cell. |
+| Table grid | `e` | Stage an edited cell value. |
+| Table grid | `N` | Stage SQL `NULL`. |
 | Table grid | `u` | Discard the selected cell's pending edit. |
-| Table grid | `s` | Save all pending edits in this grid, including other pages. |
-| Table grid | `r` | Reload from page one and reapply pending text to matching primary keys for review. |
+| Table grid | `s` | Save all pending edits in this grid. |
+| Table grid | `r` | Reload rows and reapply staged text for review. |
 
-Table pages contain up to 100 rows, ordered by the primary key. Views and tables without a primary key have no guaranteed paging order. Column headers stay visible in the winbar. Cells are clipped to 24 display columns in the grid; the cell detail shows the complete value. A `*` marks a staged cell, and the grid shows the pending cell count.
+## Limits and recovery
 
-## Completion and schema refresh
+`max_rows` defaults to 1,000 and `max_bytes` to 4 MiB. Set them in `setup()` if you need different display caps:
 
-In buffers with `filetype=sql`, completion suggests schemas and tables after `FROM` and `JOIN`, tables after `schema.`, and columns after `table.` or a recognized alias such as `u.`. Typing a dot opens Neovim's built-in completion menu automatically. Use `<C-x><C-o>` for a partial name. No completion plugin is required.
+```lua
+require("better_sql").setup({
+	python = vim.fn.expand("~/.local/share/better-sql-venv/bin/python"),
+	connections = { dev = "service=devdb" },
+	max_rows = 2000,
+	max_bytes = 8388608,
+})
+```
 
-The cache loads on connect. Run `:BetterSqlRefreshSchema` after `CREATE`, `ALTER`, or `DROP`, including changes made outside Neovim. Running DDL does not automatically refresh the tree or completion cache.
+The nonnegative caps apply across all result sets in one query request. The byte cap counts serialized row data, not column metadata or protocol framing. Zero allows no row data. Results mark truncation, and collection stops at the cap, so later result sets may not appear. These caps do not add a SQL `LIMIT` or bound all PostgreSQL and client memory use. Table paging is separate.
 
-## Editing rules
+One database operation runs at a time. Wait for it to finish, or use `:BetterSqlCancel` for a running query. Cancellation appears in the results window. It rolls back an open user transaction; the helper restores the connection or reconnects before the next operation if needed. Otherwise, SQL follows PostgreSQL transaction rules.
 
-Only existing, non-key cells in tables with a primary key can be updated. Query results, views, tables without primary keys, primary-key columns, and generated columns are read-only. The grid explains why editing a cell is blocked. Row insertion and deletion are outside the table editor's scope; use SQL commands for those operations.
+If the helper exits, run `:BetterSqlReconnect`. Visible staged edits survive the disconnection. Select each affected grid and press `r` to reload and review them before saving. If a row cannot be matched after reload, use `u` to discard its pending cells. The plugin blocks saving until the reload is complete.
 
-Editable types include `text`, `varchar`, `char`, integer and floating-point types, `numeric`, `boolean`, `uuid`, `date`, `time`, `timetz`, `timestamp`, `timestamptz`, enum, `json`, and `jsonb`. Arrays, binary data, domains, intervals, and other complex or custom types are read-only.
+## Development and release checks
 
-Enter PostgreSQL text input, such as `true`, `2026-09-24`, or `{"enabled":true}`. Enter text values without SQL string quotes. An empty input stages an empty string. Use `N` for SQL `NULL`; typing `NULL` into the prompt supplies text to the column's input conversion.
-
-Pending edits stay staged as you change pages. Saving binds cell values as parameters and updates rows using their original primary key and row version. A concurrent change or deletion causes a conflict. Any conversion, constraint, permission, or conflict error rolls back the entire save and keeps staged values visible. Review the error, then use `r` to reload before retrying, or `u` to discard a cell. Finish an explicit SQL transaction with `COMMIT` or `ROLLBACK` before saving table edits.
-
-Staged edits live in the grid buffer and are not persisted across Neovim restarts. Closing a grid wipes its staged edits. Resolve them with `s` or `u` before closing that grid.
-
-## Query limits and recovery
-
-`max_rows` defaults to 1,000 and `max_bytes` to 4 MiB. These nonnegative limits apply across the result sets of one query request. The byte budget counts serialized row data, excluding column metadata and protocol framing. A zero limit allows no row data. The results view clearly marks truncation, and collection stops at the cap, so later result sets may not be displayed.
-
-These are display limits. They do not add a SQL `LIMIT`, prevent statements from executing, or bound all PostgreSQL or client memory use. Table browsing uses database-side pages independently of the query caps.
-
-One database operation runs at a time. Wait for it to finish, or use `:BetterSqlCancel` for a running query. Cancellation is shown in the result view; the helper restores a usable connection and reconnects before the next operation if the connection broke. Cancellation rolls back an open user transaction. User-run scripts otherwise follow PostgreSQL's transaction semantics; the table save action provides the atomic edit batch.
-
-If the helper exits, use `:BetterSqlReconnect`. Visible staged edits survive disconnection. After reconnecting, select the table grid and press `r` to reload rows and review reapplied text. Saving is blocked until reload; unmatched rows remain visible so you can discard their pending cells with `u`. A reload uses fresh row versions.
-
-## Walkthrough
-
-1. Open `demo.sql`, ensure `:set filetype=sql`, and run `:BetterSqlConnect` to choose a development database.
-2. Put this SQL in the buffer and run `:BetterSqlRunBuffer`:
-
-   ```sql
-   CREATE TABLE public.better_sql_demo (
-     id integer PRIMARY KEY,
-     note text,
-     enabled boolean DEFAULT true
-   );
-   INSERT INTO public.better_sql_demo (id, note)
-   SELECT n, 'row ' || n FROM generate_series(1, 101) AS n;
-   SELECT * FROM public.better_sql_demo ORDER BY id;
-   ```
-
-3. Use `]r` to reach the `SELECT` result. Run `:BetterSqlRefreshSchema`, then `:BetterSqlSchema`. Press `<CR>` on `better_sql_demo` to open its table grid.
-4. Move to `note` with `l`, press `e`, and enter new text. Try `]p` and `[p` to see that the edit survives page changes. Press `s` to save.
-5. Back in the SQL buffer, run `SELECT * FROM public.better_sql_demo WHERE id = 1;` with `:BetterSqlRun` to verify the change. In `SELECT d. FROM public.better_sql_demo AS d`, type the dot after `d` to complete a column.
-6. When finished, run `DROP TABLE public.better_sql_demo;`, then `:BetterSqlRefreshSchema`.
-
-## Release checks
-
-Use a disposable PostgreSQL database where the test role can create schemas and tables. From the checkout, create `.venv` and install `requirements.txt`, then set a real `BETTER_SQL_TEST_DSN`. A service name keeps credentials out of shell history:
+Use a disposable PostgreSQL database where the test role can create schemas and tables. From the checkout, create `.venv`, install the runtime dependency, and set `BETTER_SQL_TEST_DSN` to a real connection. A service name keeps credentials out of shell history:
 
 ```sh
 python3 -m venv .venv
@@ -163,9 +177,9 @@ set -e
 PYTHONPATH=python python3 -m unittest discover -s tests/python -v
 PYTHONPATH=python python3 -m unittest discover -s tests/integration -v
 for test_file in tests/lua/test_*.lua; do
-  nvim --headless -u NONE -l "$test_file"
+	nvim --headless -u NONE -l "$test_file"
 done
 git diff --check
 ```
 
-Run these sequentially. The end-to-end script creates an isolated schema, runs and inspects results, refreshes the tree, pages a table, stages and saves a cell, checks completion, and removes its fixture even after an assertion fails. It requires a DSN and fails rather than silently skipping if the database is unavailable.
+Run the checks sequentially. The end-to-end Lua test creates an isolated schema, exercises the main workflows, and removes its fixture even after a failed assertion. It requires a live DSN and fails if the database is unavailable.

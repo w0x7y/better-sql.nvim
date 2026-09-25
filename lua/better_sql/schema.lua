@@ -99,9 +99,10 @@ end
 
 function M.show(on_open_relation)
   local buf = vim.api.nvim_create_buf(false, true)
-  vim.cmd("topleft 35vsplit")
+  vim.cmd("botright vsplit")
+  vim.api.nvim_win_set_width(0, math.floor(vim.o.columns / 2))
   vim.api.nvim_win_set_buf(0, buf)
-  vim.wo.wrap = false
+  vim.wo.wrap = true
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].swapfile = false
