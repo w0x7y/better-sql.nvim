@@ -6,6 +6,27 @@ local schema = require("better_sql.schema")
 local completion = require("better_sql.completion")
 local table_view = require("better_sql.table")
 
+local sql_winbars = {}
+local function update_sql_profiles()
+  for _, win in ipairs(vim.api.nvim_list_wins()) do
+    local buf = vim.api.nvim_win_get_buf(win)
+    local saved = sql_winbars[win]
+    if vim.bo[buf].filetype == "sql" and vim.api.nvim_win_get_config(win).relative == "" then
+      local current = vim.wo[win].winbar
+      if not saved or current ~= saved.rendered then saved = { original = current } end
+      saved.rendered = "SQL | " .. (M.active_profile or "No active connection"):gsub("%%", "%%%%")
+      sql_winbars[win] = saved
+      vim.wo[win].winbar = saved.rendered
+    elseif saved then
+      if vim.wo[win].winbar == saved.rendered then vim.wo[win].winbar = saved.original end
+      sql_winbars[win] = nil
+    end
+  end
+  for win in pairs(sql_winbars) do
+    if not vim.api.nvim_win_is_valid(win) then sql_winbars[win] = nil end
+  end
+end
+
 function M.setup(options)
   options = options or {}
   M.config = {
@@ -15,6 +36,11 @@ function M.setup(options)
     max_bytes = options.max_bytes or 4194304,
   }
   completion.setup()
+  vim.api.nvim_create_autocmd({ "FileType", "BufWinEnter", "WinEnter" }, {
+    group = vim.api.nvim_create_augroup("BetterSqlProfile", { clear = true }),
+    callback = update_sql_profiles,
+  })
+  update_sql_profiles()
 end
 
 M.setup()
@@ -51,6 +77,7 @@ local function connect(name, callback)
     if M.client == client then
       M.client = nil
       M.active_profile = nil
+      update_sql_profiles()
       M._catalog_generation = (M._catalog_generation or 0) + 1
       schema.set_connection(nil)
       if not intentional then
@@ -78,6 +105,7 @@ local function connect(name, callback)
       local previous = M.client
       M.client = client
       M.active_profile = name
+      update_sql_profiles()
       M._last_profile = name
       table_view.set_connection(client, name)
       schema.set_connection(name)

@@ -34,6 +34,8 @@ local function expect(sql, wanted, cursor_col)
 end
 
 expect("SELECT * FROM us", { "users" })
+expect("SELECT * FROM pu", { "public" })
+expect("SELECT * FROM users JOIN ot", { "other" })
 expect("SELECT * FROM users", { "users" }, #"SELECT * FROM us")
 expect("SELECT * FROM users JOIN or", { "orders" })
 expect("SELECT users.", { "email", "id", "username" })

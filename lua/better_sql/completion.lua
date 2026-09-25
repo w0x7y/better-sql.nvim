@@ -183,6 +183,7 @@ function M.suggest(sql, cursor_col, catalog)
     local names = {}
     local wanted_schema = qualified and qualifier.value or nil
     for _, entry in ipairs(catalog.schemas or {}) do
+      if not wanted_schema then names[#names + 1] = entry.name end
       if not wanted_schema or entry.name == wanted_schema then
         for _, relation in ipairs(entry.relations or {}) do
           names[#names + 1] = relation.name
