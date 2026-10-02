@@ -79,14 +79,13 @@ check("unexpected render failure restores readonly and completes save", function
   vim.api.nvim_buf_delete(buf, { force = true })
 end)
 check("multiline schema labels and errors", function()
-  schema.set_connection("profile\nname")
-  schema.set_catalog({ schemas = { { name = "schema\nname", relations = {
+  local snapshot = { profile = "profile\nname", catalog = { schemas = { { name = "schema\nname", relations = {
     { name = "table\nname", kind = "r", columns = { { name = "column\nname", type_label = "custom\ntype" } } },
-  } } } })
-  local buf = schema.show()
+  } } } } }
+  local buf = schema.show(nil, snapshot)
   assert(content(buf):find("schema\\nname", 1, true))
   assert(content(buf):find("column\\nname", 1, true))
-  schema.set_error({ message = "bad\nvalue" })
+  schema.render({ profile = snapshot.profile, error = { message = "bad\nvalue" } })
   assert(content(buf):find("bad\\nvalue", 1, true))
   assert(not vim.bo[buf].modifiable)
 end)

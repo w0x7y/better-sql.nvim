@@ -1,20 +1,19 @@
 local M = {}
 local display = require("better_sql.display")
+local connection = require("better_sql.connection")
 
-local catalog_cache
-local connection
-local loading = false
-local load_error
 local views = {}
 
 local function node_id(parts)
   return vim.json.encode(parts)
 end
 
-local function render_tree(state)
+local function render_tree(state, snapshot)
   if not vim.api.nvim_buf_is_valid(state.buf) then
     return
   end
+  state.snapshot = snapshot or state.snapshot
+  local current = state.snapshot
   local lines = {}
   local line_nodes = {}
   local function add(line, node)
@@ -22,15 +21,16 @@ local function render_tree(state)
     line_nodes[#lines] = node
   end
 
-  add(connection and ("Connection: " .. connection) or "No active connection")
-  if loading then
+  add(current.profile and ("Connection: " .. current.profile) or "No active connection")
+  if current.loading then
     add("Loading schema...")
-  elseif load_error then
-    add("Schema error: " .. load_error)
-  elseif not catalog_cache then
+  elseif current.error then
+    local err = current.error
+    add("Schema error: " .. (type(err) == "table" and (err.message or err.code) or tostring(err)))
+  elseif not current.catalog then
     add("No schema loaded")
   else
-    for _, catalog_schema in ipairs(catalog_cache.schemas or {}) do
+    for _, catalog_schema in ipairs(current.catalog.schemas or {}) do
       local schema_id = node_id({ "schema", catalog_schema.name })
       local schema_open = state.expanded[schema_id] ~= false
       add((schema_open and "▾ " or "▸ ") .. catalog_schema.name,
@@ -56,48 +56,24 @@ local function render_tree(state)
   display.set_lines(state.buf, 0, -1, lines)
 end
 
-local function render_views()
+function M.render(snapshot)
   for buf, state in pairs(views) do
     if vim.api.nvim_buf_is_valid(buf) then
-      render_tree(state)
+      render_tree(state, snapshot)
     else
       views[buf] = nil
     end
   end
 end
 
-function M.set_catalog(catalog)
-  catalog_cache = catalog and vim.deepcopy(catalog) or nil
-  loading = false
-  load_error = nil
-  render_views()
-end
-
+-- Compatibility for callers that previously read the cache through the tree.
 function M.get_catalog()
-  return catalog_cache and vim.deepcopy(catalog_cache) or nil
+  return connection.get_catalog()
 end
 
-function M.set_connection(profile)
-  connection = profile
-  catalog_cache = nil
-  loading = false
-  load_error = nil
-  render_views()
-end
+connection.subscribe(M.render)
 
-function M.set_loading()
-  loading = true
-  load_error = nil
-  render_views()
-end
-
-function M.set_error(err)
-  loading = false
-  load_error = type(err) == "table" and (err.message or err.code) or tostring(err)
-  render_views()
-end
-
-function M.show(on_open_relation)
+function M.show(on_open_relation, snapshot)
   local buf = vim.api.nvim_create_buf(false, true)
   vim.cmd("botright vsplit")
   vim.api.nvim_win_set_width(0, math.floor(vim.o.columns / 2))
@@ -112,6 +88,7 @@ function M.show(on_open_relation)
     expanded = {},
     line_nodes = {},
     on_open_relation = on_open_relation or function() end,
+    snapshot = snapshot or connection.snapshot(),
   }
   views[buf] = state
   vim.api.nvim_create_autocmd("BufWipeout", {

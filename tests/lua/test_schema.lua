@@ -1,18 +1,18 @@
 vim.opt.runtimepath:append(vim.fn.getcwd())
 
 local schema = require("better_sql.schema")
-schema.set_catalog({ schemas = {{ name = "public", relations = {
+local preview_catalog = { schemas = {{ name = "public", relations = {
   { schema = "public", name = "users", kind = "table", primary_key = { "id" },
     columns = {{ name = "id", type_label = "integer" }} },
   { schema = "public", name = "active_users", kind = "view", primary_key = {},
     columns = {{ name = "name", type_label = "text" }} },
-}}} })
+}}} }
 local opened
 local open_count = 0
 local buf = schema.show(function(schema_name, relation_name)
   open_count = open_count + 1
   opened = { schema_name, relation_name }
-end)
+end, { catalog = preview_catalog })
 local text = table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
 assert(text:find("users", 1, true), text)
 assert(text:find("id", 1, true), text)
@@ -42,22 +42,15 @@ vim.api.nvim_win_set_cursor(0, { schema_line, 0 })
 vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<CR>", true, false, true), "xt", false)
 assert(not table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"):find("users", 1, true))
 
-local copy = schema.get_catalog()
-copy.schemas[1].relations[1].name = "corrupted"
-assert(schema.get_catalog().schemas[1].relations[1].name == "users", "cache was mutable through getter")
-local supplied = { schemas = {{ name = "outside", relations = {} }} }
-schema.set_catalog(supplied)
-supplied.schemas[1].name = "corrupted"
-assert(schema.get_catalog().schemas[1].name == "outside", "cache was mutable through setter")
-schema.set_connection("preview")
+schema.render({ profile = "preview" })
 assert(table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"):find("Connection: preview", 1, true))
-schema.set_loading()
+schema.render({ profile = "preview", loading = true })
 assert(table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"):find("Loading schema", 1, true))
-schema.set_error({ message = "access denied" })
+schema.render({ profile = "preview", error = { message = "access denied" } })
 assert(table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"):find("Schema error: access denied", 1, true))
-schema.set_connection(nil)
+schema.render({})
 assert(table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"):find("No active connection", 1, true))
-assert(schema.get_catalog() == nil)
+assert(schema.get_catalog() == nil, "rendering a preview populated the connection cache")
 
 local better_sql = require("better_sql")
 local dsn = vim.env.BETTER_SQL_TEST_DSN

@@ -1,6 +1,6 @@
 local M = {}
 local statement = require("better_sql.statement")
-local schema = require("better_sql.schema")
+local connection = require("better_sql.connection")
 local omnifunc_name = "v:lua.require'better_sql.completion'.omnifunc"
 
 local function tokens(sql)
@@ -246,7 +246,7 @@ function M.omnifunc(findstart, _)
     local prefix = line:match("([%a_][%w_$]*)$")
     return cursor[2] - #(prefix or "")
   end
-  return M.suggest(buffer_sql(buf), offset, schema.get_catalog())
+  return M.suggest(buffer_sql(buf), offset, connection.get_catalog())
 end
 
 local group
@@ -271,7 +271,7 @@ local function attach(buf)
         local current = vim.api.nvim_win_get_cursor(win)
         if current[1] ~= cursor[1] or current[2] ~= cursor[2]
           or vim.api.nvim_get_current_line():sub(current[2], current[2]) ~= "." then return end
-        local matches = M.suggest(buffer_sql(buf), cursor_offset(buf), schema.get_catalog())
+        local matches = M.suggest(buffer_sql(buf), cursor_offset(buf), connection.get_catalog())
         if #matches > 0 then vim.fn.complete(current[2] + 1, matches) end
       end)
     end,

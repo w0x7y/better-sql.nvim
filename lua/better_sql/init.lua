@@ -1,8 +1,7 @@
 local M = {}
-local Client = require("better_sql.client")
+local connection = require("better_sql.connection")
 local statement = require("better_sql.statement")
 local results = require("better_sql.results")
-local schema = require("better_sql.schema")
 local completion = require("better_sql.completion")
 local table_view = require("better_sql.table")
 
@@ -45,122 +44,25 @@ end
 
 M.setup()
 
-local function connect(name, callback)
-  callback = callback or function() end
-  local conninfo = M.config.connections[name]
-  if type(conninfo) ~= "string" or conninfo == "" then
-    callback({ code = "unknown_profile", message = "connection profile was not found" }, nil)
-    return
-  end
-
-  M._connect_generation = (M._connect_generation or 0) + 1
-  local generation = M._connect_generation
-  local client = Client.new({ python = M.config.python })
-  local completed = false
-  local function finish(err, result)
-    if completed then return end
-    completed = true
-    callback(err, result)
-  end
-  local function connection_error(err)
-    if generation ~= M._connect_generation then
-      return { code = "connect_superseded", message = "connection attempt was superseded" }
-    end
-    if err then return err end
-    if not client.process or client.stopping then
-      return { code = "helper_exited", message = "Helper disconnected during connection setup; run :BetterSqlReconnect" }
-    end
-  end
-  client:start(function(_, err, intentional)
-    if not completed then finish(connection_error(err), nil) end
-    table_view.disconnect(client)
-    if M.client == client then
-      M.client = nil
-      M.active_profile = nil
-      update_sql_profiles()
-      M._catalog_generation = (M._catalog_generation or 0) + 1
-      schema.set_connection(nil)
-      if not intentional then
-        vim.notify((err and err.message) or "Helper disconnected; run :BetterSqlReconnect", vim.log.levels.ERROR)
-      end
-    end
-  end)
-  client:request("connect", { conninfo = conninfo }, function(err, result)
-    if completed then return end
-    err = connection_error(err)
-    if err then
-      client:stop()
-      finish(err, nil)
-      return
-    end
-    local initial_catalog
-    local function activate(switch_error)
-      if completed then return end
-      switch_error = connection_error(switch_error)
-      if switch_error then
-        client:stop()
-        finish(switch_error, nil)
-        return
-      end
-      local previous = M.client
-      M.client = client
-      M.active_profile = name
-      update_sql_profiles()
-      M._last_profile = name
-      table_view.set_connection(client, name)
-      schema.set_connection(name)
-      if previous then
-        previous:stop()
-      end
-      schema.set_catalog(initial_catalog)
-      finish(nil, result)
-    end
-    -- A successful callback means the helper is ready for the next request.
-    client:request("catalog.load", {}, function(catalog_error, catalog)
-      if completed then return end
-      catalog_error = connection_error(catalog_error)
-      initial_catalog = catalog
-      if catalog_error then
-        activate(catalog_error)
-      elseif M._last_profile and M._last_profile ~= name then
-        -- Edits can arrive while the new helper connects and loads its catalog.
-        table_view.before_switch(activate)
-      else
-        activate(nil)
-      end
-    end)
-  end)
+local function sync_connection(state)
+  M.client, M.active_profile = state.client, state.profile
+  update_sql_profiles()
 end
 
+connection.subscribe(sync_connection)
+sync_connection(connection.snapshot())
+
 function M.connect(name, callback)
-  callback = callback or function() end
-  if type(M.config.connections[name]) ~= "string" or M.config.connections[name] == "" then
-    callback({ code = "unknown_profile", message = "connection profile was not found" }, nil)
-    return
-  end
-  if M._last_profile and M._last_profile ~= name then
-    table_view.before_switch(function(err)
-      if err then callback(err, nil) else connect(name, callback) end
-    end)
-  else
-    connect(name, callback)
-  end
+  connection.connect(name, M.config, callback)
 end
 
 function M.reconnect(callback)
-  callback = callback or function(err)
-    if err then vim.notify(err.message, vim.log.levels.ERROR) end
-  end
-  if not M._last_profile then
-    callback({ code = "not_connected", message = "Choose a profile with :BetterSqlConnect first" })
-    return
-  end
-  M.connect(M._last_profile, callback)
+  connection.reconnect(M.config, callback)
 end
 
 function M.cancel()
   local active = M._active_query
-  if not active or not active.client.process or active.client.stopping then
+  if not active or not active.client:is_running() then
     vim.notify("No query is running", vim.log.levels.INFO)
     return
   end
@@ -176,27 +78,7 @@ function M.cancel()
 end
 
 function M.refresh_schema(callback)
-  callback = callback or function() end
-  local client = M.client
-  if not client then
-    local err = { code = "not_connected", message = "Connect to a PostgreSQL profile first" }
-    callback(err, nil)
-    return
-  end
-  M._catalog_generation = (M._catalog_generation or 0) + 1
-  local generation = M._catalog_generation
-  schema.set_loading()
-  client:request("catalog.load", {}, function(err, catalog)
-    if M.client ~= client or M._catalog_generation ~= generation then
-      return
-    end
-    if err then
-      schema.set_error(err)
-    else
-      schema.set_catalog(catalog)
-    end
-    callback(err, catalog)
-  end)
+  connection.refresh_schema(callback)
 end
 
 function M.open_relation(schema_name, relation_name, relation)
@@ -205,7 +87,7 @@ function M.open_relation(schema_name, relation_name, relation)
     return nil
   end
   if not relation then
-    local catalog = schema.get_catalog()
+    local catalog = connection.get_catalog()
     for _, entry in ipairs(catalog and catalog.schemas or {}) do
       if entry.name == schema_name then
         for _, candidate in ipairs(entry.relations or {}) do

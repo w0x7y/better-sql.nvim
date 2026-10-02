@@ -18,9 +18,12 @@ function Client:_fail_pending(err)
   vim.schedule(function()
     local ids = vim.tbl_keys(pending)
     table.sort(ids)
+    local callback_failed = false
     for _, id in ipairs(ids) do
-      pending[id](err, nil)
+      local ok = pcall(pending[id], err, nil)
+      if not ok then callback_failed = true end
     end
+    if callback_failed then vim.notify("A SQL request callback failed", vim.log.levels.ERROR) end
   end)
 end
 
@@ -110,17 +113,25 @@ function Client:start(on_exit)
       err = { code = "invalid_response", message = "Helper exited with incomplete JSON output; run :BetterSqlReconnect" }
     end
     self.stderr_buffer = ""
-    self:_fail_pending(err)
     vim.schedule(function()
       if on_exit then
         on_exit(result, err, intentional)
       end
     end)
+    -- Publish the lost connection before request callbacks can start more work.
+    self:_fail_pending(err)
   end)
 end
 
+function Client:is_running()
+  return self.process ~= nil and not self.stopping
+end
+
 function Client:request(method, params, callback)
-  assert(self.process and not self.stopping, "better_sql helper is not running")
+  if not self:is_running() then
+    callback(self.failure or { code = "helper_exited", message = "Helper is not running; run :BetterSqlReconnect" }, nil)
+    return nil
+  end
   self.next_id = self.next_id + 1
   local id = self.next_id
   self.callbacks[id] = callback
@@ -128,7 +139,13 @@ function Client:request(method, params, callback)
   if next(request_params) == nil then
     request_params = vim.empty_dict()
   end
-  self.process:write(vim.json.encode({ id = id, method = method, params = request_params }) .. "\n")
+  local encoded = vim.json.encode({ id = id, method = method, params = request_params }) .. "\n"
+  local written = pcall(self.process.write, self.process, encoded)
+  if not written then
+    self.callbacks[id] = nil
+    callback(self.failure or { code = "helper_exited", message = "Could not write to the SQL helper; run :BetterSqlReconnect" }, nil)
+    return nil
+  end
   return id
 end
 

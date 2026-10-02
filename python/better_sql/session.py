@@ -6,7 +6,6 @@ import threading
 import psycopg
 
 from better_sql.catalog import load_catalog
-from better_sql.edits import save_edits
 from better_sql.protocol import ProtocolError
 from better_sql.query import run_query
 from better_sql.tables import TableStore
@@ -135,7 +134,7 @@ class Session:
             table = params.get("table")
             if not isinstance(schema, str) or not schema or not isinstance(table, str) or not table:
                 raise ProtocolError("invalid_request", "schema and table must be nonempty strings")
-            return save_edits(self.conn, self.tables, {"schema": schema, "name": table}, params.get("edits"))
+            return self.tables.save(self.conn, schema, table, params.get("edits"))
         if method == "table.page":
             if self.conn is None:
                 raise ProtocolError("not_connected", "connect to a database first")
@@ -161,7 +160,8 @@ class Session:
                 ), None)
                 if relation is None:
                     raise ProtocolError("invalid_request", "relation not found")
-                return self.tables.page(self.conn, relation, offset, retain_handles=retain_handles)
+                return self.tables.page(self.conn, relation, offset, retain_handles=retain_handles,
+                                        filters=params.get("filters"), sort=params.get("sort"))
             except psycopg.Error as exc:
                 raise ProtocolError(
                     "database_error", exc.diag.message_primary or "database error",

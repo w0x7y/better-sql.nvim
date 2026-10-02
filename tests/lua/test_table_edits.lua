@@ -74,7 +74,9 @@ requests[#requests].callback({ code = "database_error", message = "bad input", h
 assert(content(buf):find("Columns: username, email", 1, true), "save omitted the affected columns")
 grid.save()
 local in_flight = requests[#requests]
-grid.stage("r1", "username", "later", false)
+vim.ui.input = function(_, callback) callback("later") end
+key("e")
+assert(grid.current_cell().cell.text == "later", "cell prompt silently ignored an edit during save")
 local refreshed = row("r1", "1", "")
 refreshed.xmin = "new-version"
 in_flight.callback(nil, { rows = { refreshed } })

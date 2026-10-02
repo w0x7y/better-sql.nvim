@@ -59,6 +59,18 @@ key("k")
 assert(grid.current_cell().column_name == "note", "changing rows lost selected column")
 assert(grid.current_cell().row_handle == "r1")
 
+local empty_columns = grid.render({
+  columns = {}, rows = { { cells = {} } }, offset = 0, has_more = false, editable = false,
+})
+for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(empty_columns, "n")) do
+  if mapping.lhs == "h" or mapping.lhs == "l" or mapping.lhs == "j" or mapping.lhs == "k" then
+    local ok, err = pcall(mapping.callback)
+    assert(ok, "navigation failed on a zero-column relation: " .. tostring(err))
+  end
+end
+assert(grid.current_cell() == nil)
+vim.api.nvim_buf_delete(empty_columns, { force = true })
+
 local requests = {}
 local fake_client = { request = function(_, method, params, callback)
   requests[#requests + 1] = { method = method, params = params, callback = callback }

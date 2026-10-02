@@ -8,6 +8,7 @@ package.loaded["better_sql.client"] = {
       self.on_exit = on_exit
       self.process = true
     end
+    function client:is_running() return self.process ~= nil end
     function client:request(method, params, callback)
       if method == "connect" then
         self.conninfo = params.conninfo

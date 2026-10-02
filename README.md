@@ -86,6 +86,18 @@ The schema cache loads when you connect. Run `:BetterSqlRefreshSchema` after `CR
 
 Table grids load up to 100 rows per page. Use `]p` and `[p` to move between pages. Tables with a primary key are ordered by that key. Views and tables without a primary key have no guaranteed paging order. The grid shows the selected cell's value near the top and keeps column headers in the winbar as you scroll sideways. Grid cells are clipped to 24 display columns; press `K` for the full value, then `q` to close its detail window.
 
+### Filter and sort table rows
+
+Select a column with `h` or `l`, then press `f` to choose a filter. Comparisons support `=`, `!=`, `>`, `>=`, `<`, and `<=`. Enter PostgreSQL text input without SQL string quotes, such as `42`, `2026-10-03`, or `alice@example.com`. The database compares using the column's type. `contains` searches the column's text representation without regard to case; `%`, `_`, and backslash are literal characters. Choose `IS NULL` or `IS NOT NULL` to check null values. An empty comparison input means an empty string; cancelling a prompt leaves the filter unchanged.
+
+Each column can have one filter. Filtering another column combines the conditions with AND; filtering the same column replaces its condition. Use **Clear column filter** in the `f` menu to remove that column's condition, or press `F` to clear all filters.
+
+Press `o` to sort the selected column in ascending or descending order, or choose **Default order** to return to primary-key ordering. Sorting places NULLs last and adds remaining primary-key columns to break ties. Sorting a view or table without a primary key does not guarantee a unique paging order. `F` keeps the selected sort order.
+
+The top line shows active filters and sorting. PostgreSQL applies them before paging. Changing a filter or sort starts at the first page; the settings stay with that grid across page changes, reloads, and reconnects to the same profile. Controls remain available when no rows match. If the database rejects a value or operation, the grid keeps its last successful page and settings.
+
+Filters and sorting use saved database values. Staged edits remain pending even if their rows become hidden, and the pending count and `s` save include those hidden rows. Reloading also finds hidden pending rows to refresh their versions for review. After a successful save with active filtering or sorting, the grid refreshes the first page to reflect the saved values. If that refresh fails, the grid reports that the edits were saved; press `r` to try loading rows again.
+
 ## Run SQL and read results
 
 Put the cursor inside a statement and run `:BetterSqlRun`. The statement finder handles semicolons inside strings, quoted identifiers, dollar quotes, line comments, and nested block comments. Use `:BetterSqlRunBuffer` for the whole buffer. In Visual mode, select text and press `<leader>sr` to run exactly that selection, including a characterwise selection. `:BetterSqlRun` with an Ex range, including Vim's `'<,'>` Visual range, runs complete selected lines.
@@ -136,6 +148,9 @@ Finish an explicit SQL transaction with `COMMIT` or `ROLLBACK` before saving tab
 | Table grid | `h`, `l` | Previous, next cell. |
 | Table grid | `j`, `k` | Next, previous row. |
 | Table grid | `]p`, `[p` | Next, previous page. |
+| Table grid | `f` | Add, replace, or clear a filter on the selected column. |
+| Table grid | `F` | Clear all filters and keep sorting. |
+| Table grid | `o` | Sort the selected column ascending, descending, or restore default order. |
 | Table grid | `K` | Show the full cell value. |
 | Cell detail | `q` | Close the detail window. |
 | Table grid | `e` | Stage an edited cell value. |
@@ -164,6 +179,8 @@ One database operation runs at a time. Wait for it to finish, or use `:BetterSql
 If the helper exits, run `:BetterSqlReconnect`. Visible staged edits survive the disconnection. Select each affected grid and press `r` to reload and review them before saving. If a row cannot be matched after reload, use `u` to discard its pending cells. The plugin blocks saving until the reload is complete.
 
 ## Development and release checks
+
+See [state ownership](docs/architecture.md) for module responsibilities and [the domain glossary](CONTEXT.md) for the editing vocabulary.
 
 Use a disposable PostgreSQL database where the test role can create schemas and tables. From the checkout, create `.venv`, install the runtime dependency, and set `BETTER_SQL_TEST_DSN` to a real connection. A service name keeps credentials out of shell history:
 

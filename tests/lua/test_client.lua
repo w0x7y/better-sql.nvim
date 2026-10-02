@@ -2,6 +2,17 @@ vim.opt.runtimepath:append(vim.fn.getcwd())
 
 local Client = require("better_sql.client")
 
+local unavailable = Client.new({})
+local unavailable_calls, unavailable_error, unavailable_result = 0, nil, nil
+local accepted, unavailable_id = pcall(function()
+  return unavailable:request("catalog.load", {}, function(err, result)
+    unavailable_calls, unavailable_error, unavailable_result = unavailable_calls + 1, err, result
+  end)
+end)
+assert(accepted and unavailable_calls == 1 and unavailable_error.code == "helper_exited"
+  and unavailable_result == nil and unavailable_id == nil,
+  "request without a running helper must complete with a structured error instead of raising")
+
 local client = Client.new({ python = "python3" })
 local reply
 client:start()

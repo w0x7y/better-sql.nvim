@@ -1,13 +1,11 @@
 """Atomic saves, typed input, and stale handles against PostgreSQL."""
 
-import copy
 import decimal
 
 from psycopg import sql
 from psycopg.pq import TransactionStatus
 
 from better_sql.catalog import load_catalog
-from better_sql.edits import EditConflict, save_edits
 from better_sql.protocol import ProtocolError, encode_error
 from better_sql.session import Session
 from better_sql.tables import TableStore
@@ -42,32 +40,29 @@ class EditIntegrationTests(DatabaseTestCase):
         return self.other_conn.execute("SELECT username, amount FROM users ORDER BY id").fetchall()
 
     def test_two_rows_commit_and_refresh_originals_for_next_save(self):
-        old_xmin = self.store.handles[self.rows[0]["handle"]].xmin
-        result = save_edits(self.conn, self.store, self.table, [
+        result = self.store.save(self.conn, self.schema, "users", [
             self.edit(0, "username", "changed"), self.edit(1, "amount", "3.50"),
         ])
         self.assertEqual(self.values(), [("changed", decimal.Decimal("10")), ("second", decimal.Decimal("3.50"))])
         self.assertEqual([r["handle"] for r in result["rows"]], [r["handle"] for r in self.rows])
         self.assertEqual(result["rows"][1]["cells"][3]["text"], "7.00")
-        original = self.store.handles[self.rows[0]["handle"]]
-        self.assertEqual(original.values["username"], "changed")
-        self.assertNotEqual(original.xmin, old_xmin)
-        self.assertEqual(result["rows"][0]["xmin"], original.xmin)
-        save_edits(self.conn, self.store, self.table, [self.edit(0, "username", "again")])
+        self.assertIsInstance(result["rows"][0]["xmin"], str)
+        self.store.save(self.conn, self.schema, "users", [self.edit(0, "username", "again")])
         self.assertEqual(self.values()[0][0], "again")
 
     def assert_failed_batch(self, second, code, sqlstate=None):
-        originals = copy.deepcopy(self.store.handles)
         with self.assertRaises(ProtocolError) as raised:
-            save_edits(self.conn, self.store, self.table, [self.edit(0, "username", "changed"), second])
+            self.store.save(self.conn, self.schema, "users", [self.edit(0, "username", "changed"), second])
         error = encode_error(raised.exception)
         self.assertEqual(error["code"], code)
         self.assertEqual(error["handle"], self.rows[1]["handle"])
         if sqlstate:
             self.assertEqual(error["sqlstate"], sqlstate)
-        self.assertEqual(self.store.handles, originals)
         self.assertEqual(self.values()[0][0], "first")
         self.assertEqual(self.conn.info.transaction_status, TransactionStatus.IDLE)
+        # The first UPDATE was rolled back: its original xmin must still be usable.
+        self.store.save(self.conn, self.schema, "users", [self.edit(0, "username", "retry")])
+        self.assertEqual(self.values()[0][0], "retry")
         return raised.exception
 
     def test_invalid_numeric_rolls_back_first_row_and_reports_column(self):
@@ -79,8 +74,7 @@ class EditIntegrationTests(DatabaseTestCase):
 
     def test_concurrent_update_rolls_back_first_row(self):
         self.other_conn.execute("UPDATE users SET username = 'other' WHERE id = 2")
-        error = self.assert_failed_batch(self.edit(1, "username", "mine"), "edit_conflict")
-        self.assertIsInstance(error, EditConflict)
+        self.assert_failed_batch(self.edit(1, "username", "mine"), "edit_conflict")
         self.assertEqual(self.values()[1][0], "other")
 
     def test_deleted_row_rolls_back_first_row(self):
@@ -89,7 +83,7 @@ class EditIntegrationTests(DatabaseTestCase):
         self.assertEqual(len(self.values()), 1)
 
     def test_null_and_empty_string_remain_distinct(self):
-        result = save_edits(self.conn, self.store, self.table, [self.edit(0, "amount", "ignored", True), self.edit(1, "username", "")])
+        result = self.store.save(self.conn, self.schema, "users", [self.edit(0, "amount", "ignored", True), self.edit(1, "username", "")])
         self.assertEqual(result["rows"][0]["cells"][2], {"text": "", "is_null": True})
         self.assertEqual(result["rows"][1]["cells"][1], {"text": "", "is_null": False})
         self.assertEqual(self.values(), [("first", None), ("", decimal.Decimal("20"))])
@@ -100,7 +94,7 @@ class EditIntegrationTests(DatabaseTestCase):
         self.conn.execute('INSERT INTO "Odd"" Table" VALUES (\'one\', 1, \'two\', \'original\'), (\'one\', 2, \'two\', \'other tenant\')')
         row = self.store.page(self.conn, relation, 0)["rows"][0]
         text = "'); DROP TABLE users; --"
-        result = save_edits(self.conn, self.store, relation, [{"handle": row["handle"], "changes": [
+        result = self.store.save(self.conn, relation["schema"], relation["name"], [{"handle": row["handle"], "changes": [
             {"column": "Value", "text": "three", "is_null": False},
             {"column": "Text", "text": text, "is_null": False},
         ]}])
@@ -116,7 +110,7 @@ class EditIntegrationTests(DatabaseTestCase):
             self.conn.execute(sql.SQL("INSERT INTO {} VALUES (1, 'old')").format(sql.Identifier(name, "table")))
             relation = next(s for s in load_catalog(self.conn)["schemas"] if s["name"] == name)["relations"][0]
             row = self.store.page(self.conn, relation, 0)["rows"][0]
-            result = save_edits(self.conn, self.store, relation, [{"handle": row["handle"], "changes": [{"column": "value", "text": "new", "is_null": False}]}])
+            result = self.store.save(self.conn, relation["schema"], relation["name"], [{"handle": row["handle"], "changes": [{"column": "value", "text": "new", "is_null": False}]}])
             self.assertEqual(result["rows"][0]["cells"][1]["text"], "new")
         finally:
             self.conn.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(name)))
@@ -124,30 +118,60 @@ class EditIntegrationTests(DatabaseTestCase):
     def test_read_only_columns_and_relations_rejected(self):
         for column in ("id", "doubled", "tags", "unknown"):
             with self.subTest(column=column), self.assertRaises(ProtocolError):
-                save_edits(self.conn, self.store, self.table, [self.edit(0, column, "42")])
+                self.store.save(self.conn, self.schema, "users", [self.edit(0, column, "42")])
         for name in ("keyless", "user_view"):
             relation = self.relations[name]
             self.store.page(self.conn, relation, 0)
             with self.subTest(relation=name), self.assertRaises(ProtocolError):
-                save_edits(self.conn, self.store, relation, [self.edit(0, "username", "changed")])
+                self.store.save(self.conn, relation["schema"], relation["name"], [self.edit(0, "username", "changed")])
         self.assertEqual(self.values()[0][0], "first")
 
-    def test_supplied_metadata_cannot_override_stored_editability(self):
-        forged = copy.deepcopy(self.table)
-        forged["columns"][0]["editable"] = True
-        with self.assertRaises(ProtocolError):
-            save_edits(self.conn, self.store, forged, [self.edit(0, "id", "42")])
+    def test_page_metadata_mutation_cannot_override_stored_editability(self):
+        page = self.store.page(self.conn, self.table, 0)
+        self.rows = page["rows"]
+        self.table["columns"][0]["editable"] = True
+        page["columns"][0]["editable"] = True
+        with self.assertRaises(ProtocolError) as raised:
+            self.store.save(self.conn, self.schema, "users", [self.edit(0, "id", "42")])
+        self.assertEqual(raised.exception.code, "invalid_request")
         self.assertEqual(self.values()[0][0], "first")
 
     def test_active_user_transaction_is_rejected_without_consuming_it(self):
         self.conn.execute("BEGIN")
         try:
             with self.assertRaises(ProtocolError):
-                save_edits(self.conn, self.store, self.table, [self.edit(0, "username", "changed")])
+                self.store.save(self.conn, self.schema, "users", [self.edit(0, "username", "changed")])
             self.assertEqual(self.conn.info.transaction_status, TransactionStatus.INTRANS)
             self.assertEqual(self.values()[0][0], "first")
         finally:
             self.conn.execute("ROLLBACK")
+
+    def test_non_autocommit_connection_is_rejected_before_opening_transaction(self):
+        self.conn.autocommit = False
+        try:
+            with self.assertRaises(ProtocolError) as raised:
+                self.store.save(self.conn, self.schema, "users", [self.edit(0, "username", "changed")])
+            self.assertEqual(raised.exception.code, "invalid_request")
+            self.assertEqual(self.conn.info.transaction_status, TransactionStatus.IDLE)
+            self.assertEqual(self.values()[0][0], "first")
+        finally:
+            self.conn.autocommit = True
+        self.store.save(self.conn, self.schema, "users", [self.edit(0, "username", "retry")])
+        self.assertEqual(self.values()[0][0], "retry")
+
+    def test_handles_cannot_cross_helper_sessions(self):
+        session = Session()
+        try:
+            session.handle("connect", {"conninfo": self.conn.info.dsn})
+            params = {"schema": self.schema, "table": "users"}
+            session.handle("table.page", params)
+            with self.assertRaises(ProtocolError) as raised:
+                session.handle("table.save", {**params, "edits": [self.edit(0, "username", "changed")]})
+            self.assertEqual(raised.exception.code, "invalid_request")
+            self.assertEqual(raised.exception.details["handle"], self.rows[0]["handle"])
+            self.assertEqual(self.values()[0][0], "first")
+        finally:
+            session.close()
 
     def test_session_dispatches_save_and_reports_database_errors(self):
         session = Session()
@@ -171,15 +195,17 @@ class EditIntegrationTests(DatabaseTestCase):
             relation = next(r for s in load_catalog(self.conn)["schemas"] if s["name"] == self.schema
                             for r in s["relations"] if r["name"] == "deferred_unique")
             rows = self.store.page(self.conn, relation, 0)["rows"]
-            originals = copy.deepcopy(self.store.handles)
             with self.assertRaises(ProtocolError) as raised:
-                save_edits(self.conn, self.store, relation, [{"handle": row["handle"], "changes": [
+                self.store.save(self.conn, relation["schema"], relation["name"], [{"handle": row["handle"], "changes": [
                     {"column": "value", "text": "duplicate", "is_null": False},
                 ]} for row in rows])
             self.assertEqual(raised.exception.details["sqlstate"], "23505")
             self.assertIsNone(raised.exception.details["handle"])
-            self.assertEqual(self.store.handles, originals)
             self.assertEqual(self.other_conn.execute("SELECT value FROM deferred_unique ORDER BY id").fetchall(), [("first",), ("second",)])
+            result = self.store.save(self.conn, self.schema, "deferred_unique", [{"handle": row["handle"], "changes": [
+                {"column": "value", "text": f"retry {index}", "is_null": False},
+            ]} for index, row in enumerate(rows)])
+            self.assertEqual([row["cells"][1]["text"] for row in result["rows"]], ["retry 0", "retry 1"])
         finally:
             self.conn.execute("DROP TABLE deferred_unique")
 
@@ -193,14 +219,17 @@ class EditIntegrationTests(DatabaseTestCase):
             relation = next(r for s in load_catalog(self.conn)["schemas"] if s["name"] == self.schema
                             for r in s["relations"] if r["name"] == "parent")
             row = self.store.page(self.conn, relation, 0)["rows"][0]
-            originals = copy.deepcopy(self.store.handles)
             with self.assertRaises(ProtocolError) as raised:
-                save_edits(self.conn, self.store, relation, [{"handle": row["handle"], "changes": [
+                self.store.save(self.conn, relation["schema"], relation["name"], [{"handle": row["handle"], "changes": [
                     {"column": "value", "text": "changed", "is_null": False},
                 ]}])
             self.assertEqual(raised.exception.code, "internal_error")
-            self.assertEqual(self.store.handles, originals)
             self.assertEqual(self.other_conn.execute("SELECT value FROM parent ORDER BY value").fetchall(), [("child",), ("parent",)])
+            self.other_conn.execute("DELETE FROM ONLY child")
+            result = self.store.save(self.conn, self.schema, "parent", [{"handle": row["handle"], "changes": [
+                {"column": "value", "text": "retry", "is_null": False},
+            ]}])
+            self.assertEqual(result["rows"][0]["cells"][1]["text"], "retry")
         finally:
             self.conn.execute("DROP TABLE parent CASCADE")
 
@@ -211,7 +240,7 @@ class EditIntegrationTests(DatabaseTestCase):
             relation = next(r for s in load_catalog(self.conn)["schemas"] if s["name"] == self.schema
                             for r in s["relations"] if r["name"] == "json_key")
             row = self.store.page(self.conn, relation, 0)["rows"][0]
-            result = save_edits(self.conn, self.store, relation, [{"handle": row["handle"], "changes": [
+            result = self.store.save(self.conn, relation["schema"], relation["name"], [{"handle": row["handle"], "changes": [
                 {"column": "value", "text": "new", "is_null": False},
             ]}])
             self.assertEqual(result["rows"][0]["cells"][1]["text"], "new")
@@ -231,8 +260,7 @@ class EditIntegrationTests(DatabaseTestCase):
                         relation = next(r for s in load_catalog(self.conn)["schemas"] if s["name"] == self.schema
                                         for r in s["relations"] if r["name"] == "domain_key")
                         row = self.store.page(self.conn, relation, 0)["rows"][0]
-                        self.assertEqual(self.store.handles[row["handle"]].key, ({"tenant": 1},))
-                        result = save_edits(self.conn, self.store, relation, [{"handle": row["handle"], "changes": [
+                        result = self.store.save(self.conn, relation["schema"], relation["name"], [{"handle": row["handle"], "changes": [
                             {"column": "value", "text": "new", "is_null": False},
                         ]}])
                         self.assertEqual(result["rows"][0]["cells"][1]["text"], "new")
@@ -244,7 +272,7 @@ class EditIntegrationTests(DatabaseTestCase):
                         self.conn.execute(sql.SQL("ALTER DOMAIN {} ADD CONSTRAINT reject_old_key CHECK (VALUE <> '{{\"tenant\": 1}}'::jsonb) NOT VALID").format(sql.Identifier(type_name)))
                         try:
                             with self.assertRaises(ProtocolError) as raised:
-                                save_edits(self.conn, self.store, relation, [{"handle": row["handle"], "changes": [
+                                self.store.save(self.conn, relation["schema"], relation["name"], [{"handle": row["handle"], "changes": [
                                     {"column": "value", "text": "must not save", "is_null": False},
                                 ]}])
                             self.assertEqual(raised.exception.details["sqlstate"], "23514")

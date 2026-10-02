@@ -97,7 +97,6 @@ local reserved_catalog = { schemas = { { name = "public", relations = {
 assert(vim.deep_equal(completion.suggest("SELECT * FROM ord", #"SELECT * FROM ord", reserved_catalog), { '"order"' }))
 assert(vim.deep_equal(completion.suggest('SELECT "order".', #'SELECT "order".', reserved_catalog), { '"select"', "normal" }))
 
-schema.set_catalog(catalog)
 better_sql.setup()
 vim.opt.virtualedit = "onemore"
 local sql_buf = vim.api.nvim_create_buf(true, false)
@@ -107,7 +106,7 @@ assert(vim.bo[sql_buf].omnifunc == "v:lua.require'better_sql.completion'.omnifun
 vim.api.nvim_buf_set_lines(sql_buf, 0, -1, false, { "SELECT users." })
 vim.api.nvim_win_set_cursor(0, { 1, #"SELECT users." })
 assert(completion.omnifunc(1, "") == #"SELECT users.")
-assert(vim.deep_equal(completion.omnifunc(0, ""), { "id", "username", "email" }))
+assert(vim.deep_equal(completion.omnifunc(0, ""), {}), "disconnected completion reused a catalog")
 vim.bo[sql_buf].filetype = "text"
 assert(vim.bo[sql_buf].omnifunc == "", "completion remained attached after leaving SQL")
 assert(#vim.api.nvim_get_autocmds({ event = "TextChangedI", buffer = sql_buf }) == 0)
