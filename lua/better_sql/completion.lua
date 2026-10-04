@@ -3,52 +3,6 @@ local statement = require("better_sql.statement")
 local connection = require("better_sql.connection")
 local omnifunc_name = "v:lua.require'better_sql.completion'.omnifunc"
 
-local function tokens(sql)
-  local result = {}
-  local normal = statement.normal_positions(sql)
-  local index = 1
-  while index <= #sql do
-    if not normal[index] then
-      index = index + 1
-    else
-      local char = sql:sub(index, index)
-      local word = sql:sub(index):match("^[%a_][%w_$]*")
-      if word then
-        result[#result + 1] = { value = word:lower(), kind = "name", first = index, last = index + #word - 1 }
-        index = index + #word
-      elseif char == '"' then
-        local finish = index + 1
-        while finish <= #sql do
-          if sql:sub(finish, finish) == '"' then
-            if sql:sub(finish + 1, finish + 1) == '"' then
-              finish = finish + 2
-            else
-              break
-            end
-          else
-            finish = finish + 1
-          end
-        end
-        if finish <= #sql then
-          result[#result + 1] = {
-            value = sql:sub(index + 1, finish - 1):gsub('""', '"'),
-            kind = "name", first = index, last = finish, quoted = true,
-          }
-          index = finish + 1
-        else
-          index = index + 1
-        end
-      elseif char == "." or char == "," or char == "(" or char == ")" then
-        result[#result + 1] = { value = char, kind = "punctuation", first = index, last = index }
-        index = index + 1
-      else
-        index = index + 1
-      end
-    end
-  end
-  return result
-end
-
 local function is_name(token)
   return token and token.kind == "name"
 end
@@ -171,13 +125,12 @@ end
 -- cursor_col is the zero-based byte offset in the whole SQL statement.
 function M.suggest(sql, cursor_col, catalog)
   if not catalog or type(sql) ~= "string" or cursor_col < 0 or cursor_col > #sql then return {} end
-  if statement.state_at({ sql }, 0, cursor_col) ~= "normal" then return {} end
-  local selected = statement.at_cursor({ sql }, 0, cursor_col)
-  if not selected then return {} end
-  local items = tokens(selected.sql)
+  local context = statement.context({ sql }, 0, cursor_col)
+  if not context or context.state ~= "normal" or not context.statement then return {} end
+  local items = context.tokens
   local _, parents = query_scopes(items)
-  local cursor = cursor_col - selected.start_col
-  local before = tokens(selected.sql:sub(1, cursor))
+  local cursor = context.cursor
+  local before = context.prefix_tokens
   local scope = query_scopes(before)
   local index = #before
   local prefix = ""

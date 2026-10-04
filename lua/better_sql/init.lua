@@ -31,6 +31,7 @@ function M.setup(options)
   M.config = {
     connections = options.connections or {},
     python = options.python or "python3",
+    choose_pending_edits = options.choose_pending_edits,
     max_rows = options.max_rows or 1000,
     max_bytes = options.max_bytes or 4194304,
   }
@@ -79,6 +80,13 @@ end
 
 function M.refresh_schema(callback)
   connection.refresh_schema(callback)
+end
+
+function M.export(path, overwrite)
+  local columns, rows = results.export_data()
+  if not columns then columns, rows = table_view.export_data() end
+  if not columns then return "Select a result set or table grid with columns first" end
+  return require("better_sql.export").write(path, columns, rows, overwrite)
 end
 
 function M.open_relation(schema_name, relation_name, relation)

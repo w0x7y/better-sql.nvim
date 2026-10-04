@@ -1,12 +1,16 @@
 local M = {}
 local Client = require("better_sql.client")
-local table_view = require("better_sql.table")
+local table_session = require("better_sql.table_session")
 
 local client, profile, last_profile, catalog
 local loading, load_error = false, nil
 local connect_generation, catalog_generation = 0, 0
 local pending_connect, pending_refresh
 local listeners = {}
+
+local function choose_pending_edits(resolve)
+  vim.ui.select({ "Save", "Discard", "Stay" }, { prompt = "Pending table edits before switching profiles:" }, resolve)
+end
 
 local function error_value(code, message)
   return { code = code, message = message }
@@ -58,6 +62,7 @@ end
 
 function M.connect(name, config, callback)
   callback = callback or function() end
+  local select = config.choose_pending_edits or choose_pending_edits
   local conninfo = config.connections[name]
   if type(conninfo) ~= "string" or conninfo == "" then
     callback(error_value("unknown_profile", "connection profile was not found"), nil)
@@ -69,6 +74,14 @@ function M.connect(name, config, callback)
   pending_connect = operation
   if previous_attempt then
     complete(previous_attempt, error_value("connect_superseded", "connection attempt was superseded"), nil)
+  end
+  if operation.completed then return end
+
+  local function choose(resolve)
+    select(function(choice)
+      -- A delayed choice belongs only to its still-pending connection attempt.
+      if not operation.completed then resolve(choice) end
+    end)
   end
 
   local function connection_error(err)
@@ -95,7 +108,7 @@ function M.connect(name, config, callback)
         obsolete = invalidate_refresh()
         publish()
       end
-      table_view.disconnect(candidate)
+      table_session.disconnect(candidate)
       if not operation.completed then complete(operation, connection_error(exit_error) or helper_error(), nil) end
       if obsolete then complete(obsolete, exit_error or helper_error(), nil) end
       if was_active and not intentional then
@@ -126,17 +139,17 @@ function M.connect(name, config, callback)
           loading, load_error = false, nil
           local obsolete = invalidate_refresh()
           publish()
-          if client == candidate then table_view.set_connection(candidate, name) end
+          if client == candidate then table_session.set_connection(candidate, name) end
           if previous then previous:stop() end
           if obsolete then complete(obsolete, superseded_catalog(), nil) end
           complete(operation, nil, result)
         end
         -- Recheck edits made while the candidate connected and loaded schema.
-        if last_profile and last_profile ~= name then table_view.before_switch(activate) else activate(nil) end
+        if last_profile and last_profile ~= name then table_session.before_switch(choose, activate) else activate(nil) end
       end)
     end)
   end
-  if last_profile and last_profile ~= name then table_view.before_switch(begin) else begin(nil) end
+  if last_profile and last_profile ~= name then table_session.before_switch(choose, begin) else begin(nil) end
 end
 
 function M.reconnect(config, callback)

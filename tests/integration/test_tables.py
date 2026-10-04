@@ -151,6 +151,8 @@ class TableIntegrationTests(DatabaseTestCase):
         self.assertEqual(first["rows"][-1]["key"], [{"text": "100", "is_null": False}])
         self.assertEqual([c["name"] for c in first["columns"]], ["id", "label"])
         self.assertEqual(first["offset"], 0)
+        self.assertEqual(first["page_size"], 100)
+        self.assertEqual(first["next_offset"], 100)
         self.assertTrue(first["editable"])
         self.assertIsNone(first["read_only_reason"])
 
@@ -159,6 +161,24 @@ class TableIntegrationTests(DatabaseTestCase):
         self.assertEqual(second["rows"][0]["cells"][0]["text"], "101")
         self.assertFalse(second["has_more"])
         self.assertEqual(second["offset"], 100)
+        self.assertEqual(second["page_size"], 100)
+        self.assertIsNone(second["next_offset"])
+
+    def test_small_pages_follow_next_offsets_and_empty_filters_are_terminal(self):
+        relation = self.relations["numbered"]
+        offset, ids = 0, []
+        while offset is not None:
+            page = self.store.page(self.conn, relation, offset, limit=3)
+            self.assertEqual(page["page_size"], 3)
+            ids.extend(int(row["key"][0]["text"]) for row in page["rows"])
+            offset = page["next_offset"]
+        self.assertEqual(ids, list(range(1, 102)))
+        empty = self.store.page(self.conn, relation, 0, limit=3, filters=[
+            {"column": "id", "operator": "=", "value": "999"},
+        ])
+        self.assertEqual(empty["rows"], [])
+        self.assertEqual(empty["page_size"], 3)
+        self.assertIsNone(empty["next_offset"])
 
     def test_composite_key_order_quoted_identifiers_and_null_cell(self):
         page = self.store.page(self.conn, self.relations['Odd" Table'], 0)

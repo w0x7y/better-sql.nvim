@@ -60,6 +60,8 @@ Run `chmod 600 ~/.pgpass` on Unix. Libpq also supports `PGSERVICEFILE` and `PGPA
 
 A profile can also use a connection string directly, for example `"host=localhost port=5432 dbname=appdb user=appuser"`. The plugin does not save passwords or log connection strings. One profile is active at a time; its name appears in SQL winbars, results, schema trees, and table grids. When you switch profiles with staged edits, choose **Save**, **Discard**, or **Stay**. A failed save leaves the current profile and edits in place.
 
+Use `:BetterSqlConnect dev` to connect directly to a profile. Tab completion suggests configured profile names. Running `:BetterSqlConnect` without a name opens the profile picker.
+
 If `:BetterSqlConnect` reports a missing Python dependency, install Psycopg into the exact interpreter set by `python`. The default is `python3`.
 
 ### Supabase
@@ -104,7 +106,17 @@ Put the cursor inside a statement and run `:BetterSqlRun`. The statement finder 
 
 Queries run exactly as entered. The plugin does not add `LIMIT` or prevent writes. The results window opens below the SQL window and shows command status, column headers, and rows. For a request with several result sets, press `]r` or `[r` to move between them. `NULL` appears as `NULL`; an empty string appears as `""`. Newlines and tabs are escaped for display.
 
+In results, use `h` and `l` to move between cells and `j` and `k` to move between rows while keeping the selected column. Counts work, such as `5j`. Press `K` to inspect the full value with its original line breaks, then `q` to close the detail window. These cell controls do nothing for command-only results or result sets with no rows.
+
+In results or a table grid, press `yc` to copy the selected cell's raw text to the unnamed register. A register prefix works, such as `"ayc` to copy to register `a` or `"+yc` to copy to the clipboard when Neovim has a clipboard provider. Copying preserves newlines, tabs, and the full value. SQL NULL copies as the text `NULL`; an empty string copies as an empty string. Table cells copy their visible staged value.
+
 Database errors appear in the results window with their SQL state. When PostgreSQL supplies an error position, the cursor moves to that position in the source SQL window. Use `:BetterSqlCancel` to request cancellation of a running query.
+
+### Export CSV
+
+Run `:BetterSqlExport ~/results.csv` from the results window or a table grid. File completion is available. The command exports the selected result set, or only the visible table page with its staged values. It includes column headers and raw values without display clipping, escape sequences, or edit markers. NULL is an unquoted empty field; an empty string is a quoted empty field. Quotes, commas, Unicode, and multiline values are preserved.
+
+Existing files are protected. Use `:BetterSqlExport! ~/results.csv` to replace one. Exports contain only loaded rows, so a truncated query result or one table page is not a full database export. Exporting neither runs a query nor saves staged edits. Empty result sets export their headers; command-only results cannot be exported.
 
 ## Complete names while writing SQL
 
@@ -119,7 +131,7 @@ Completion reads the schema cache. If a new table or column is missing, run `:Be
 
 ## Edit and save table cells
 
-Open a table from the schema tree. Use `h` and `l` to change cells, or `j` and `k` to change rows while keeping the selected column. Press `e` to enter a replacement value. Enter PostgreSQL text input without SQL string quotes, such as `true`, `2026-09-24`, or `{"enabled":true}`. An empty input means an empty string. Press `N` to stage SQL `NULL`; typing `NULL` in the prompt passes the text `NULL` to the column's input conversion.
+Open a table from the schema tree. Use `h` and `l` to change cells, or `j` and `k` to change rows while keeping the selected column. Counts work, such as `5j`. Press `e` to enter a replacement value. Enter PostgreSQL text input without SQL string quotes, such as `true`, `2026-09-24`, or `{"enabled":true}`. An empty input means an empty string. Press `N` to stage SQL `NULL`; typing `NULL` in the prompt passes the text `NULL` to the column's input conversion.
 
 An edited cell shows `*`, and the grid shows the pending cell count. Edits remain staged while you change pages. Press `u` on a cell to discard its pending edit, or `s` to save all pending edits in that grid, including edits on other pages. The save uses bound values and one database transaction. If any value conversion, constraint, permission, or concurrent edit fails, the whole save rolls back and staged values remain visible. Press `r` to reload rows and review staged text against fresh row versions before retrying. If a row no longer matches, discard its staged cells with `u`.
 
@@ -131,22 +143,26 @@ Finish an explicit SQL transaction with `COMMIT` or `ROLLBACK` before saving tab
 
 | Command | Action |
 | --- | --- |
-| `:BetterSqlConnect` | Select a configured profile and load its schema cache. |
+| `:BetterSqlConnect [profile]` | Connect to a named profile, or select one, and load its schema cache. |
 | `:BetterSqlSchema` | Open the cached schema tree. |
 | `:BetterSqlRefreshSchema` | Reload the schema cache. |
 | `:BetterSqlRun` | Run the statement under the cursor, or the complete lines in an Ex range. |
 | `:BetterSqlRunBuffer` | Run the entire buffer. |
 | `:BetterSqlCancel` | Request cancellation of the running query. |
 | `:BetterSqlReconnect` | Restart the last selected profile's connection. |
+| `:BetterSqlExport[!] {path}` | Export the selected result set or visible table page as CSV; `!` permits overwriting. |
 
 | View | Key | Action |
 | --- | --- | --- |
 | SQL, Visual mode | `<leader>sr` | Run the selected text. |
 | SQL, Insert mode | `<C-x><C-o>` | Complete a partial name. |
 | Results | `]r`, `[r` | Next, previous result set. |
+| Results | `h`, `l`, `j`, `k` | Move between cells and rows; counts are supported. |
+| Results | `K` | Show the full cell value. |
+| Results, table grid | `yc` | Copy the raw cell value; a register prefix is supported. |
 | Schema tree | `<CR>` | Toggle a schema, or open a relation and toggle its columns. |
-| Table grid | `h`, `l` | Previous, next cell. |
-| Table grid | `j`, `k` | Next, previous row. |
+| Table grid | `h`, `l` | Previous, next cell; counts are supported. |
+| Table grid | `j`, `k` | Next, previous row; counts are supported. |
 | Table grid | `]p`, `[p` | Next, previous page. |
 | Table grid | `f` | Add, replace, or clear a filter on the selected column. |
 | Table grid | `F` | Clear all filters and keep sorting. |
