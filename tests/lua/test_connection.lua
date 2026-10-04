@@ -93,24 +93,33 @@ reply(recovered, switched_request, { schemas = {{ name = 'old profile', relation
 assert(switched_calls == 1 and connection.get_catalog().schemas[1].name == 'second')
 
 -- The switch guard must run before work begins and again after catalog load.
-local grid = require('better_sql.table')
-local original_guard = grid.before_switch
+local sessions = require('better_sql.table_session')
+local columns = { { name = 'value', editable = true } }
+local guarded_grid = sessions.new(connection.snapshot().client,
+  { schema = 'public', name = 'fixture', columns = columns }, 'second', nil, {
+    columns = columns, rows = { { handle = 'guarded', key = {}, cells = { { text = 'original', is_null = false } } } },
+    offset = 0, has_more = false, editable = true,
+  })
+assert(not guarded_grid:stage('guarded', 'value', 'before connect', false))
 local guards = {}
-grid.before_switch = function(callback) guards[#guards + 1] = callback end
+app.config.choose_pending_edits = function(resolve) guards[#guards + 1] = resolve end
 local guarded_calls, guarded_error = 0, nil
 local helper_count = #helpers
 connection.connect('first', app.config, function(err) guarded_calls, guarded_error = guarded_calls + 1, err end)
 assert(#helpers == helper_count and #guards == 1, 'switch started before dirty-edit guard')
-guards[1](nil)
+guards[1]('Discard')
+assert(not guarded_grid:stage('guarded', 'value', 'during connect', false))
 ready(helpers[#helpers], 'first')
 assert(#guards == 2 and guarded_calls == 0 and connection.snapshot().profile == 'second',
   'candidate activated before checking edits made during connection setup')
-guards[2]({ code = 'switch_cancelled', message = 'keep edits' })
+guards[2]('Stay')
 assert(guarded_calls == 1 and guarded_error.code == 'switch_cancelled')
 assert(connection.snapshot().profile == 'second' and not second.killed)
-guards[2](nil)
+guards[2]('Discard')
 assert(guarded_calls == 1, 'duplicate switch confirmation completed callback twice')
-grid.before_switch = original_guard
+assert(guarded_grid:snapshot().pending_count == 1, 'duplicate choice discarded retained edits')
+guarded_grid:close()
+app.config.choose_pending_edits = nil
 
 -- Presentation errors must not interrupt completion of database operations.
 local fail_render = true
@@ -201,7 +210,6 @@ assert(replaced_helper.killed and latest_helper.killed and not nested_helper.kil
   'reentrant activation leaked an old helper or stopped the newest helper')
 
 local resilient_connect_calls = 0
-local sessions = require('better_sql.table_session')
 local loading_grid = sessions.new(connection.snapshot().client, { schema = 'public', name = 'fixture', columns = {} }, 'second')
 local rebound_coherent
 loading_grid:load(0, nil, function(err)

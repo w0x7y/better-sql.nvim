@@ -68,29 +68,35 @@ for _, stage in ipairs({ 'connect', 'catalog' }) do
   if not ok then failures[#failures + 1] = err end
 end
 -- Exit can also happen while profile-switch confirmation holds activation.
-local grid = require('better_sql.table')
-local original_before_switch = grid.before_switch
-local switch_calls, activate = 0, nil
-grid.before_switch = function(callback)
-  switch_calls = switch_calls + 1
-  if switch_calls == 1 then callback(nil) else activate = callback end
-end
+local sessions = require('better_sql.table_session')
+local columns = { { name = 'value', editable = true } }
+local grid = sessions.new(original_client,
+  { schema = 'public', name = 'fixture', columns = columns }, 'local_db', nil, {
+    columns = columns, rows = { { handle = 'waiting', key = {}, cells = { { text = 'original', is_null = false } } } },
+    offset = 0, has_more = false, editable = true,
+  })
+local activate
+app.config.choose_pending_edits = function(resolve) activate = resolve end
 app.config.connections.other_db = 'password=delivery-secret'
 local waiting_calls, waiting_error = 0, nil
 app.connect('other_db', function(err)
   waiting_calls, waiting_error = waiting_calls + 1, err
 end)
 local waiting = helpers[#helpers]
+assert(not grid:stage('waiting', 'value', 'retain during setup', false))
 deliver(waiting, { database = 'postgres', user = 'tester' })
 assert(#drain() == 0)
 deliver(waiting, { schemas = {} })
 assert(#drain() == 0 and activate and waiting_calls == 0)
 waiting.on_exit({ code = 7, signal = 0 })
 assert(#drain() == 0 and waiting_calls == 1 and waiting_error.code == 'helper_exited')
-activate(nil)
+activate('Discard')
 assert(waiting_calls == 1 and app.client == original_client and not original.killed,
   'late profile confirmation activated a dead helper')
-grid.before_switch = original_before_switch
+assert(grid:snapshot().pending_count == 1 and not grid:snapshot().needs_reload,
+  'candidate helper exit invalidated the active table session')
+grid:close()
+app.config.choose_pending_edits = nil
 
 vim.system, vim.schedule = original_system, original_schedule
 assert(#failures == 0, table.concat(failures, '\n'))

@@ -7,7 +7,8 @@ local function row(handle, id, value)
   return { handle = handle, key = { cell(id) }, cells = { cell(id), cell(value) } }
 end
 local function page(rows, offset, more)
-  return { columns = columns, rows = rows, offset = offset or 0, has_more = more or false, editable = true }
+  return { columns = columns, rows = rows, offset = offset or 0, has_more = more or false,
+    page_size = 100, next_offset = more and (offset or 0) + 100 or vim.NIL, editable = true }
 end
 local function transport()
   local requests = {}

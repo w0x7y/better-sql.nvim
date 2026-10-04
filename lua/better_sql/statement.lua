@@ -32,9 +32,11 @@ end
 
 -- Scan once from left to right. state_at is the state before the byte at
 -- target_offset; this makes a cursor at the end of a line useful to completion.
-local function scan(source, target_offset, collect_normal)
+local function scan(source, target_offset)
   local spans = {}
-  local normal_positions = collect_normal and {} or nil
+  local tokens = {}
+  local quoted_start
+  local name_end = 0
   local state = "normal"
   local state_at
   local block_depth = 0
@@ -52,7 +54,6 @@ local function scan(source, target_offset, collect_normal)
     local next_char = source:sub(index + 1, index + 1)
     local step = 1
     local state_before = state
-    if normal_positions then normal_positions[index] = state_before == "normal" end
 
     if state == "normal" then
       if char == "'" then
@@ -62,6 +63,7 @@ local function scan(source, target_offset, collect_normal)
         state = "single_quote"
       elseif char == '"' then
         state = "double_quote"
+        quoted_start = index
       elseif char == "$" then
         local delimiter = dollar_delimiter(source, index)
         if delimiter then
@@ -79,6 +81,12 @@ local function scan(source, target_offset, collect_normal)
       elseif char == ";" then
         spans[#spans + 1] = { first = statement_start, last = index }
         statement_start = index + 1
+      elseif index > name_end and char:match("[%a_]") then
+        local word = source:match("^[%a_][%w_$]*", index)
+        name_end = index + #word - 1
+        tokens[#tokens + 1] = { value = word:lower(), kind = "name", first = index, last = name_end }
+      elseif char == "." or char == "," or char == "(" or char == ")" then
+        tokens[#tokens + 1] = { value = char, kind = "punctuation", first = index, last = index }
       end
     elseif state == "single_quote" then
       if escape_string and char == "\\" and next_char ~= "" then
@@ -96,6 +104,11 @@ local function scan(source, target_offset, collect_normal)
         if next_char == '"' then
           step = 2
         else
+          tokens[#tokens + 1] = {
+            value = source:sub(quoted_start + 1, index - 1):gsub('""', '"'),
+            kind = "name", first = quoted_start, last = index, quoted = true,
+          }
+          quoted_start = nil
           state = "normal"
         end
       end
@@ -134,25 +147,12 @@ local function scan(source, target_offset, collect_normal)
   if statement_start <= #source then
     spans[#spans + 1] = { first = statement_start, last = #source }
   end
-  return spans, state_at, normal_positions
+  return spans, state_at, tokens
 end
 
--- Positions where a SQL token may begin, using the same lexical pass as
--- statement selection and cursor state. String and comment contents are false.
-function M.normal_positions(source)
-  local _, _, positions = scan(source, nil, true)
-  return positions
-end
-
--- row and col are zero-based byte offsets. The end position is exclusive.
-function M.at_cursor(lines, row, col)
-  local starts = line_starts(lines)
-  local cursor = offset_at(lines, starts, row, col)
-  if not cursor then
-    return nil
-  end
-  local source = table.concat(lines, "\n")
-  local spans = scan(source)
+-- Select the same semicolon-delimited span as at_cursor, then trim only
+-- whitespace. Comments remain part of the SQL sent to PostgreSQL.
+local function selected_statement(source, starts, spans, cursor)
   for _, span in ipairs(spans) do
     if cursor >= span.first and (cursor <= span.last or (cursor == #source + 1 and span.last == #source)) then
       local first, last = span.first, span.last
@@ -171,23 +171,61 @@ function M.at_cursor(lines, row, col)
           start_col = start_col,
           end_row = end_row,
           end_col = end_col,
-        }
+        }, first, last
+      end
+      return nil
+    end
+  end
+end
+
+local function relative_token(token, first, last, value)
+  return {
+    value = value or token.value,
+    kind = token.kind,
+    first = token.first - first + 1,
+    last = last - first + 1,
+    quoted = token.quoted,
+  }
+end
+
+-- row and col are zero-based byte positions in lines. Token first/last are
+-- one-based, inclusive byte offsets in the selected statement. cursor counts
+-- bytes before the cursor relative to its trimmed start. Prefix tokens are
+-- independent records, so completion can annotate each list with query scopes.
+function M.context(lines, row, col)
+  local starts = line_starts(lines)
+  local cursor = offset_at(lines, starts, row, col)
+  if not cursor then return nil end
+  local source = table.concat(lines, "\n")
+  local spans, state, scanned = scan(source, cursor)
+  local selected, first, last = selected_statement(source, starts, spans, cursor)
+  local context = { state = state, statement = selected, tokens = {}, prefix_tokens = {} }
+  if not selected then return context end
+  context.cursor = cursor - first
+  for _, token in ipairs(scanned) do
+    if token.first >= first and token.last <= last then
+      context.tokens[#context.tokens + 1] = relative_token(token, first, token.last)
+      if token.last < cursor then
+        context.prefix_tokens[#context.prefix_tokens + 1] = relative_token(token, first, token.last)
+      elseif token.first < cursor and token.kind == "name" and not token.quoted then
+        context.prefix_tokens[#context.prefix_tokens + 1] = relative_token(
+          token, first, cursor - 1, source:sub(token.first, cursor - 1):lower())
       end
     end
   end
-  return nil
+  return context
 end
 
--- State immediately before the cursor byte; callers can suppress completion
--- unless this returns "normal". Uses the same lexer as at_cursor.
+-- The selected statement's end position is exclusive.
+function M.at_cursor(lines, row, col)
+  local context = M.context(lines, row, col)
+  return context and context.statement or nil
+end
+
+-- State immediately before the cursor byte, including end-of-line positions.
 function M.state_at(lines, row, col)
-  local starts = line_starts(lines)
-  local cursor = offset_at(lines, starts, row, col)
-  if not cursor then
-    return nil
-  end
-  local _, state = scan(table.concat(lines, "\n"), cursor)
-  return state
+  local context = M.context(lines, row, col)
+  return context and context.state or nil
 end
 
 return M

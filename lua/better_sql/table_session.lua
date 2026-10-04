@@ -1,6 +1,5 @@
 -- Owns grid originals, staged cells and recovery independently of Neovim buffers.
 local M = {}
-local PAGE_SIZE = 100
 local sessions, queues = {}, {}
 
 local function failure(code, message) return { code = code, message = message } end
@@ -143,8 +142,20 @@ local function retained_handles(state)
   return sorted_keys(retained)
 end
 
-local function accept_rows(state, page)
+local function copy_page(page)
   page = vim.deepcopy(page)
+  -- Older preview/fixture pages omit paging facts. Normalize their raw rows
+  -- before recovery appends review rows; helper replies supply both fields.
+  if page.page_size == nil then page.page_size = #page.rows end
+  if page.next_offset == nil then
+    page.next_offset = page.has_more and page.page_size > 0
+      and page.offset + page.page_size or vim.NIL
+  end
+  return page
+end
+
+local function accept_rows(state, page)
+  page = copy_page(page)
   for index, row in ipairs(page.rows) do
     for handle in pairs(state.pending) do
       if vim.deep_equal(state.keys[handle], row.key) then
@@ -206,7 +217,7 @@ local function fetch_page(state, operation, offset, options, callback)
         end
         if state.recovering and next(state.stale) then
           if #filters > 0 and not unfiltered then fetch(0, true); return end
-          if page.has_more then fetch(next_offset + PAGE_SIZE, unfiltered); return end
+          if type(page.next_offset) == "number" then fetch(page.next_offset, unfiltered); return end
         end
         state.error = nil
         if next(state.stale) then
@@ -352,7 +363,7 @@ end
 function M.new(client, relation, profile, changed, preview)
   local state = {
     client = client, relation = vim.deepcopy(relation), profile = profile, changed = changed,
-    page = vim.deepcopy(preview or { columns = relation and relation.columns or {}, rows = {},
+    page = copy_page(preview or { columns = relation and relation.columns or {}, rows = {},
       offset = 0, has_more = false, editable = true }),
     pending = {}, originals = {}, keys = {}, stale = {}, filters = {}, generation = 0,
   }
@@ -410,6 +421,16 @@ function M.new(client, relation, profile, changed, preview)
     fetch_page(state, operation, offset, options, function(err, reset)
       finish(state, operation, err, nil, reset)
     end)
+  end
+  function grid:next_page(callback)
+    if type(state.page.next_offset) == "number" then
+      self:load(state.page.next_offset, nil, callback)
+    elseif callback then callback(nil) end
+  end
+  function grid:previous_page(callback)
+    if state.page.offset > 0 and state.page.page_size > 0 then
+      self:load(math.max(0, state.page.offset - state.page.page_size), nil, callback)
+    elseif callback then callback(nil) end
   end
   function grid:reload(callback)
     if not state.client or state.closed or state.operation then

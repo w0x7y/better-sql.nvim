@@ -1,48 +1,11 @@
 local M = {}
 local display = require("better_sql.display")
+local grid = require("better_sql.grid")
 
 local state
 
-local function render(set, index, count, profile)
-  local lines = { string.format("%s  Result %d/%d", display.line(profile or "PostgreSQL"), index, count) }
-  lines[#lines + 1] = "Status: " .. display.line(set.status or "")
-  if set.truncated then
-    lines[#lines + 1] = "Output truncated by the configured row or byte limit"
-  end
-
-  local columns = set.columns or {}
-  if #columns > 0 then
-    local widths = {}
-    local rows = {}
-    for col, column in ipairs(columns) do
-      widths[col] = vim.fn.strdisplaywidth(display.line(column.name))
-    end
-    for _, row in ipairs(set.rows or {}) do
-      local cells = {}
-      for col, cell in ipairs(row) do
-        cells[col] = display.cell(cell.text, cell.is_null)
-        widths[col] = math.max(widths[col], vim.fn.strdisplaywidth(cells[col]))
-      end
-      rows[#rows + 1] = cells
-    end
-    local function formatted(cells)
-      local fields = {}
-      for col, value in ipairs(cells) do
-        fields[col] = value .. string.rep(" ", widths[col] - vim.fn.strdisplaywidth(value))
-      end
-      return table.concat(fields, " | ")
-    end
-    local headers = {}
-    for _, column in ipairs(columns) do
-      headers[#headers + 1] = display.line(column.name)
-    end
-    lines[#lines + 1] = ""
-    lines[#lines + 1] = formatted(headers)
-    for _, cells in ipairs(rows) do
-      lines[#lines + 1] = formatted(cells)
-    end
-  end
-  return lines
+local function current_view()
+  if state and vim.api.nvim_get_current_buf() == state.buffer then return state end
 end
 
 function M.select_set(index)
@@ -54,7 +17,12 @@ function M.select_set(index)
   if not vim.api.nvim_buf_is_valid(buf) then
     return
   end
-  display.set_lines(buf, 0, -1, render(state.sets[index], index, #state.sets, state.profile))
+  local set = state.sets[index]
+  local prefix = { string.format("%s  Result %d/%d", display.line(state.profile or "PostgreSQL"), index, #state.sets),
+    "Status: " .. display.line(set.status or "") }
+  if set.truncated then prefix[#prefix + 1] = "Output truncated by the configured row or byte limit" end
+  if #(set.columns or {}) > 0 then prefix[#prefix + 1] = "" end
+  state.grid:render(set.columns or {}, set.rows or {}, { prefix = prefix, reset = true })
 end
 
 function M.show(result, profile_name)
@@ -68,6 +36,7 @@ function M.show(result, profile_name)
   vim.bo[buf].buftype = "nofile"
   vim.bo[buf].bufhidden = "wipe"
   vim.bo[buf].swapfile = false
+  vim.bo[buf].filetype = "better_sql_results"
   vim.api.nvim_buf_set_name(buf, "better-sql://results/" .. buf)
   local old_window = old and vim.api.nvim_buf_is_valid(old) and vim.fn.bufwinid(old) or -1
   if old_window ~= -1 then
@@ -79,15 +48,27 @@ function M.show(result, profile_name)
   vim.wo.wrap = false
   vim.wo.sidescrolloff = 0
 
-  state = { buffer = buf, sets = sets, index = 1, profile = profile_name }
+  local view = { buffer = buf, sets = sets, index = 1, profile = profile_name }
+  state = view
   M.current_buffer = buf
+  view.grid = grid.new(buf)
   M.select_set(1)
-  vim.keymap.set("n", "]r", function() M.select_set(state.index + 1) end, { buffer = buf, desc = "Next SQL result set" })
-  vim.keymap.set("n", "[r", function() M.select_set(state.index - 1) end, { buffer = buf, desc = "Previous SQL result set" })
+  vim.keymap.set("n", "]r", function() M.select_set(view.index + 1) end, { buffer = buf, desc = "Next SQL result set" })
+  vim.keymap.set("n", "[r", function() M.select_set(view.index - 1) end, { buffer = buf, desc = "Previous SQL result set" })
+  vim.api.nvim_create_autocmd("BufWipeout", { buffer = buf, once = true, callback = function()
+    if state == view then state = nil end
+  end })
   if old and old ~= buf and vim.api.nvim_buf_is_valid(old) then
     vim.api.nvim_buf_delete(old, { force = true })
   end
   return buf
+end
+
+function M.export_data()
+  local view = current_view()
+  if not view then return end
+  local set = view.sets[view.index]
+  if #(set.columns or {}) > 0 then return set.columns, set.rows or {} end
 end
 
 function M.show_error(err, profile_name)

@@ -14,6 +14,12 @@ A PostgreSQL table, partitioned table or view identified by its schema and name.
 **Table session**:
 The browsing and editing lifecycle for one relation under one connection profile. Its table grid displays the current page and staged cell values.
 
+**Grid**:
+A view of rows and columns with one selected cell. Query-result grids show loaded query values; table grids also show staged replacements.
+
+**SQL statement**:
+A unit of SQL selected at the cursor. Semicolons inside quoted values or comments do not split statements.
+
 **Row original**:
 The primary key and database version captured when an editable row is loaded or successfully saved. Saving compares that version to detect concurrent changes.
 _Avoid_: Row cache

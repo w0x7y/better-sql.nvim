@@ -3,15 +3,6 @@ vim.opt.runtimepath:append(vim.fn.getcwd())
 local completion = require("better_sql.completion")
 local schema = require("better_sql.schema")
 local better_sql = require("better_sql")
-local statement = require("better_sql.statement")
-
-local lexical_sample = "SELECT 'x' -- hidden\nFROM users"
-local positions = statement.normal_positions(lexical_sample)
-assert(positions[1] and positions[8], "normal SQL bytes were lost")
-assert(not positions[9] and not positions[10], "quoted text was marked as normal SQL")
-assert(not positions[15], "comment text was marked as normal SQL")
-assert(positions[22], "SQL after a line comment was not restored")
-
 local catalog = { schemas = {
   { name = "public", relations = {
     { schema = "public", name = "users", kind = "r", columns = {

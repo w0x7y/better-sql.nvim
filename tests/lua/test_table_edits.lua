@@ -16,7 +16,8 @@ local function row(handle, id, username)
   return { handle = handle, key = { cell(id) }, cells = { cell(id), cell(username), cell("mail"), cell("computed") } }
 end
 local function page(rows, offset, more)
-  return { columns = columns, rows = rows, offset = offset or 0, has_more = more or false, editable = true }
+  return { columns = columns, rows = rows, offset = offset or 0, has_more = more or false, editable = true,
+    page_size = 100, next_offset = more and ((offset or 0) + 100) or vim.NIL }
 end
 local requests = {}
 local client = { request = function(_, method, params, callback)
@@ -97,8 +98,8 @@ grid.stage("r1", "username", "first recovered", false)
 key("]p")
 requests[#requests].callback(nil, page({ row("r101", "101", "last") }, 100))
 grid.stage("r101", "username", "last recovered", false)
-grid.disconnect(client)
-grid.set_connection(client, "test")
+require("better_sql.table_session").disconnect(client)
+require("better_sql.table_session").set_connection(client, "test")
 local before = #requests
 grid.save()
 assert(#requests == before, "disconnected originals were sent to save")
@@ -147,7 +148,9 @@ requests[#requests].callback(nil, page({ row("race1", "1", "original") }))
 grid.stage("race1", "username", "save first", false)
 vim.ui.select = function(_, _, callback) callback("Save") end
 local switch_done, switch_error
-grid.before_switch(function(err) switch_done, switch_error = true, err end)
+require("better_sql.table_session").before_switch(function(resolve)
+  vim.ui.select({ "Save", "Discard", "Stay" }, {}, resolve)
+end, function(err) switch_done, switch_error = true, err end)
 local switching_save = requests[#requests]
 grid.stage("race1", "username", "new pending", false)
 switching_save.callback(nil, { rows = { row("race1", "1", "save first") } })
@@ -158,7 +161,9 @@ grid.save()
 local current_save = requests[#requests]
 vim.ui.select = function(_, _, callback) callback("Discard") end
 local busy_error
-grid.before_switch(function(err) busy_error = err end)
+require("better_sql.table_session").before_switch(function(resolve)
+  vim.ui.select({ "Save", "Discard", "Stay" }, {}, resolve)
+end, function(err) busy_error = err end)
 assert(busy_error and grid.pending_count() == 1, "switch discarded an in-flight save")
 current_save.callback(nil, { rows = { row("race1", "1", "new pending") } })
 vim.api.nvim_buf_delete(buf, { force = true })

@@ -88,6 +88,7 @@ class TableStore:
         self._relations[(relation["schema"], relation["name"])] = deepcopy(relation)
         return {
             "columns": columns, "rows": rows, "offset": offset,
+            "page_size": limit, "next_offset": offset + limit if len(fetched) > limit else None,
             "has_more": len(fetched) > limit, "editable": editable,
             "read_only_reason": read_only_reason,
         }
