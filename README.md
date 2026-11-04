@@ -216,3 +216,5 @@ git diff --check
 ```
 
 Run the checks sequentially. The end-to-end Lua test creates an isolated schema, exercises the main workflows, and removes its fixture even after a failed assertion. It requires a live DSN and fails if the database is unavailable.
+
+CI runs the same checks against PostgreSQL 17 on every push and pull request, once with the oldest supported versions (Neovim 0.10, Python 3.10) and once with current ones. See `.github/workflows/check.yml`.

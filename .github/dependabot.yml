@@ -1,0 +1,10 @@
+# The workflow pins each action to a commit; this opens a PR when a new release comes out.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
