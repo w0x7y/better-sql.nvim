@@ -57,7 +57,7 @@ jobs:
           tar xzf "$RUNNER_TEMP/nvim.tar.gz" -C "$RUNNER_TEMP"
           echo "$RUNNER_TEMP/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
       - name: Install the Python dependency
-        # The Lua tests start the helper with .venv/bin/python, as in the README.
+        # The Lua tests start the helper with .venv/bin/python.
         run: |
           python -m venv .venv
           .venv/bin/python -m pip install -r requirements.txt
