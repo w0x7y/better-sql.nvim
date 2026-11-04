@@ -8,7 +8,7 @@ function Client.new(options)
     helper = options.helper,
     next_id = 0,
     callbacks = {},
-    stdout_buffer = "",
+    stdout_parts = {},
   }, Client)
 end
 
@@ -56,15 +56,19 @@ function Client:_on_stdout(chunk)
     return
   end
 
-  self.stdout_buffer = self.stdout_buffer .. chunk
+  -- Keep partial lines as parts: growing one string per chunk is quadratic for large replies.
+  local parts, first = self.stdout_parts, 1
   while true do
-    local newline = self.stdout_buffer:find("\n", 1, true)
+    local newline = chunk:find("\n", first, true)
     if not newline then
+      if first <= #chunk then parts[#parts + 1] = chunk:sub(first) end
       return
     end
 
-    local line = self.stdout_buffer:sub(1, newline - 1)
-    self.stdout_buffer = self.stdout_buffer:sub(newline + 1)
+    parts[#parts + 1] = chunk:sub(first, newline - 1)
+    local line = table.concat(parts)
+    parts, first = {}, newline + 1
+    self.stdout_parts = parts
     local decoded, response = pcall(vim.json.decode, line)
     if not decoded or type(response) ~= "table" or type(response.id) ~= "number"
       or type(response.ok) ~= "boolean"
@@ -93,7 +97,7 @@ function Client:start(on_exit)
   assert(not self.process, "better_sql helper is already running")
   local helper = self.helper or vim.api.nvim_get_runtime_file("python/better_sql_helper.py", false)[1]
   assert(helper, "better_sql helper was not found on runtimepath")
-  self.stdout_buffer = ""
+  self.stdout_parts = {}
   self.stderr_buffer, self.stderr_hint, self.failure = "", nil, nil
   self.process = vim.system({ self.python, "-u", helper }, {
     stdin = true,
@@ -109,7 +113,7 @@ function Client:start(on_exit)
       .. " and signal " .. tostring(result.signal))
     local err = self.failure or { code = "helper_exited",
       message = detail .. "; run :BetterSqlReconnect" }
-    if self.stdout_buffer ~= "" and not self.failure then
+    if #self.stdout_parts > 0 and not self.failure then
       err = { code = "invalid_response", message = "Helper exited with incomplete JSON output; run :BetterSqlReconnect" }
     end
     self.stderr_buffer = ""
