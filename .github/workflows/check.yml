@@ -1,0 +1,78 @@
+name: check
+
+# Pull requests run on their own trigger, so push covers only main.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# The checks only read the repository.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (Neovim ${{ matrix.nvim }}, Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest versions the README supports.
+          - nvim: v0.10.4
+            nvim_sha256: 95aaa8e89473f5421114f2787c13ae0ec6e11ebbd1a13a1bd6fcf63420f8073f
+            python: "3.10"
+          - nvim: v0.12.6
+            nvim_sha256: 474430d53e6264f6d6dd18db42d6dc9df3a1b56ca9e88a325bbf860e1a811d87
+            python: "3.14"
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      BETTER_SQL_TEST_DSN: host=localhost port=5432 dbname=postgres user=postgres
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false # nothing pushes, so the token isn't left in .git/config
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install Neovim
+        # A fixed release with a checked download; bump the version and checksum together.
+        env:
+          NVIM_VERSION: ${{ matrix.nvim }}
+          NVIM_SHA256: ${{ matrix.nvim_sha256 }}
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/nvim.tar.gz" "https://github.com/neovim/neovim/releases/download/$NVIM_VERSION/nvim-linux-x86_64.tar.gz"
+          echo "$NVIM_SHA256  $RUNNER_TEMP/nvim.tar.gz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/nvim.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
+      - name: Install the Python dependency
+        # The Lua tests start the helper with .venv/bin/python, as in the README.
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -r requirements.txt
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+          echo "BETTER_SQL_PYTHON=$PWD/.venv/bin/python" >> "$GITHUB_ENV"
+      - name: Python unit tests
+        run: PYTHONPATH=python python -m unittest discover -s tests/python -v
+      - name: Python integration tests
+        run: PYTHONPATH=python python -m unittest discover -s tests/integration -v
+      - name: Lua tests
+        run: |
+          for test_file in tests/lua/test_*.lua; do
+            echo "::group::$test_file"
+            nvim --headless -u NONE -l "$test_file"
+            echo "::endgroup::"
+          done
+      - name: Whitespace
+        run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD

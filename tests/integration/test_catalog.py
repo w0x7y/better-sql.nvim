@@ -2,7 +2,8 @@
 
 import json
 
-from better_sql.catalog import load_catalog
+from better_sql.catalog import load_catalog, load_relation
+from better_sql.protocol import ProtocolError
 from better_sql.session import Session
 from support import DatabaseTestCase
 
@@ -43,6 +44,17 @@ class CatalogIntegrationTests(DatabaseTestCase):
         catalog = load_catalog(self.conn)
         schema = next(s for s in catalog["schemas"] if s["name"] == self.schema)
         return next(r for r in schema["relations"] if r["name"] == name)
+
+    def test_single_relation_matches_full_catalog(self):
+        for name in ("orders", "allowed_types", "order_view", "Mixed Case", "empty_table"):
+            self.assertEqual(load_relation(self.conn, self.schema, name), self.relation(name))
+        self.assertIsNone(load_relation(self.conn, self.schema, "missing"))
+        self.assertIsNone(load_relation(self.conn, "pg_catalog", "pg_class"))
+        session = Session()
+        session.conn = self.conn
+        with self.assertRaises(ProtocolError) as raised:
+            session.handle("table.page", {"schema": self.schema, "table": "missing"})
+        self.assertEqual((raised.exception.code, raised.exception.message), ("invalid_request", "relation not found"))
 
     def test_composite_key_and_physical_column_order(self):
         relation = self.relation("orders")

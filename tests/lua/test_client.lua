@@ -49,6 +49,14 @@ assert(delivered[3].id == 3 and delivered[3].result.pong == 3 and delivered[3].e
 decoded:_on_stdout(first)
 vim.wait(10)
 assert(#delivered == 3, "duplicate reply invoked callback twice")
+for index = 4, 5 do
+  decoded:request("ping", {}, function(_, result) delivered[#delivered + 1] = { id = index, result = result } end)
+end
+local pair = '{"id":4,"ok":true,"result":{"pong":4}}\n{"id":5,"ok":true,"result":{"pong":5}}\n'
+decoded:_on_stdout(pair:sub(1, 50))
+decoded:_on_stdout(pair:sub(51))
+assert(vim.wait(3000, function() return #delivered == 5 end), "a reply split after another reply was lost")
+assert(delivered[4].result.pong == 4 and delivered[5].result.pong == 5)
 
 local exit_helper = vim.fn.tempname() .. ".py"
 vim.fn.writefile({ "import sys", "sys.stdin.readline()" }, exit_helper)
