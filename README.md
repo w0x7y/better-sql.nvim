@@ -29,7 +29,7 @@ Browse PostgreSQL schemas, run SQL, complete table and column names, and edit ex
    }
    ```
 
-   This repository is private. Make sure Git can access it before Lazy installs it; if you use GitHub CLI, run [`gh auth setup-git`](https://cli.github.com/manual/gh_auth_setup-git).
+   Restart Neovim and run `:checkhealth better_sql`. It checks the helper, Python, Psycopg and your profiles.
 
 3. Define `devdb` in `~/.pg_service.conf`. If the server needs a password, add it to `~/.pgpass`. See [Connections and credentials](#connections-and-credentials).
 4. Open a `.sql` file, run `:BetterSqlConnect`, and select `dev`. Type `SELECT current_database();`, put the cursor on that statement, and run `:BetterSqlRun`. Results open below your SQL window.
@@ -62,7 +62,7 @@ A profile can also use a connection string directly, for example `"host=localhos
 
 Use `:BetterSqlConnect dev` to connect directly to a profile. Tab completion suggests configured profile names. Running `:BetterSqlConnect` without a name opens the profile picker.
 
-If `:BetterSqlConnect` reports a missing Python dependency, install Psycopg into the exact interpreter set by `python`. The default is `python3`.
+If `:BetterSqlConnect` reports a missing Python dependency, install Psycopg into the exact interpreter set by `python`. The default is `python3`. `:checkhealth better_sql` shows which interpreter it checked and which Python and Psycopg versions it found.
 
 ### Supabase
 

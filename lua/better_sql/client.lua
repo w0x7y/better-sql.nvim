@@ -43,7 +43,7 @@ function Client:_on_stderr(chunk)
   -- it can include source lines, conninfo, and passwords from tracebacks.
   self.stderr_buffer = ((self.stderr_buffer or "") .. chunk):sub(-8192)
   if self.stderr_buffer:find("ModuleNotFoundError", 1, true) then
-    self.stderr_hint = "Python dependency missing; install psycopg in the configured Python environment"
+    self.stderr_hint = "Python dependency missing; install psycopg in the configured Python (see :checkhealth better_sql)"
   elseif self.stderr_buffer:find("SyntaxError", 1, true) then
     self.stderr_hint = "Python could not parse the helper; check the configured Python version and helper installation"
   else
