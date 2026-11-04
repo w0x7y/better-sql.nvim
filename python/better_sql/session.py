@@ -5,7 +5,7 @@ import threading
 
 import psycopg
 
-from better_sql.catalog import load_catalog
+from better_sql.catalog import load_catalog, load_relation
 from better_sql.protocol import ProtocolError
 from better_sql.query import run_query
 from better_sql.tables import TableStore
@@ -142,25 +142,13 @@ class Session:
             table = params.get("table")
             if not isinstance(schema, str) or not schema or not isinstance(table, str) or not table:
                 raise ProtocolError("invalid_request", "schema and table must be nonempty strings")
-            offset = params.get("offset", 0)
-            retain_handles = params.get("retain_handles")
-            if type(offset) is not int or offset < 0:
-                raise ProtocolError("invalid_request", "offset must be a nonnegative integer")
-            if retain_handles is not None and (
-                not isinstance(retain_handles, list)
-                or any(not isinstance(handle, str) for handle in retain_handles)
-            ):
-                raise ProtocolError("invalid_request", "retain_handles must be an array of strings")
             try:
-                catalog = load_catalog(self.conn)
-                relation = next((
-                    relation
-                    for entry in catalog["schemas"] if entry["name"] == schema
-                    for relation in entry["relations"] if relation["name"] == table
-                ), None)
+                relation = load_relation(self.conn, schema, table)
                 if relation is None:
                     raise ProtocolError("invalid_request", "relation not found")
-                return self.tables.page(self.conn, relation, offset, retain_handles=retain_handles,
+                # TableStore.page() validates offset and retain_handles.
+                return self.tables.page(self.conn, relation, params.get("offset", 0),
+                                        retain_handles=params.get("retain_handles"),
                                         filters=params.get("filters"), sort=params.get("sort"))
             except psycopg.Error as exc:
                 raise ProtocolError(
