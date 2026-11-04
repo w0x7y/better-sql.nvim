@@ -29,4 +29,4 @@ Connection attempts check staged edits before starting and before activating a c
 
 Connection lifecycle calls Table sessions directly. The optional `choose_pending_edits(resolve)` setup callback supplies the Save/Discard/Stay choice; Neovim's chooser is the default. Choices from superseded attempts are ignored before they can mutate staged edits.
 
-The transport and PostgreSQL connection are the test seams. Session tests exercise state transitions without creating buffers, while UI and integration tests cover real Neovim rendering and PostgreSQL behavior. See the [development checks](../README.md#development-and-release-checks) for the full suite.
+The transport and PostgreSQL connection are the test seams. Session tests exercise state transitions without creating buffers, while UI and integration tests cover real Neovim rendering and PostgreSQL behavior. The [CI workflow](../.github/workflows/check.yml) shows how to run the full suite against a disposable PostgreSQL database.
